@@ -1,0 +1,467 @@
+
+
+*************************************************************************
+
+		RESUMEN MUUUUYYY..... RESUMIDO DE LAS CONVERSACIONES CON CHATGPT 
+
+
+		
+Me gustaria implementar una red TIPO ONE "SLAVE" MULIPLE "MASTERS"con modulos ESP32 
+
+Dispongo de 9 ESP32-S3 con las siguientes MAC.......
+ S-3_ Nº1 Dirección MAC de la placa ESP: 98:3d:ae:eb:44:bc 
+ S-3_ Nº2 Dirección MAC de la placa ESP: d8:3b:da:a5:f8:10 
+ S-3_ Nº3 Dirección MAC de la placa ESP: 98:3d:ae:ea:e9:2c 
+ S-3_ Nº4 Dirección MAC de la placa ESP: 98:3d:ae:ea:ea:5c 
+ S-3_ Nº5 Dirección MAC de la placa ESP: 98:3d:ae:ea:ff:8c 
+ S-3_ Nº6 Dirección MAC de la placa ESP: d8:3b:da:a6:02:74 
+ S-3_ Nº7 Dirección MAC de la placa ESP: 98:3d:ae:ea:ef:c8 
+ S-3_ Nº8 Dirección MAC de la placa ESP: 98:3d:ae:eb:3b:1c 
+ S-3_ Nº9 Dirección MAC de la placa ESP: 98:3d:ae:eb:07:04
+ 
+ Un ESP32 DevKitc_V4 antena exterior MAC 88:13:bf:00:e2:50
+ .................................................................
+ Por favor, ayudame a completar el código para 1 Slave y los 8 Master
+ 
+*** Respuesta del CHATGPT:
+ 
+¡Entendido! Vamos a construir un sistema completo que cumpla con tu objetivo:
+
+Un receptor (SLAVE):
+
+Recibe mensajes de 10 transmisores (MASTER).
+Guarde y muestre los datos (ordenados por orden de llegada) en el monitor serie.
+Diez transmisores (MASTER):
+
+Cada uno envía un mensaje con su número de identificación y el tiempo del cronómetro cuando está detenido.
+Voy a enviarte los códigos completos para el SLAVE y el MASTER .
+
+Código del SLAVE
+El receptor almacenará los mensajes y mostrará los datos ordenados por el orden de llegada.
+
+CPP-P
+
+Copiar código
+#include <esp_now.h>
+#include <WiFi.h>
+
+// Estructura para guardar los datos de cada MASTER
+struct MasterData {
+  char mac[18]; // Dirección MAC
+  char message[50]; // Mensaje recibido
+};
+
+MasterData masters[10]; // Suponiendo un máximo de 10 MASTERS
+int masterCount = 0;
+
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+
+  Serial.println("Inicializando ESP-NOW...");
+
+  // Configurar Wi-Fi en modo Station
+  WiFi.mode(WIFI_STA);
+
+  // Inicializar ESP-NOW
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("Error al inicializar ESP-NOW");
+    return;
+  }
+  Serial.println("ESP-NOW inicializado correctamente.");
+
+  // Registrar la función de callback para recibir datos
+  esp_now_register_recv_cb(onDataReceived);
+}
+
+// Función de callback para procesar los datos recibidos
+void onDataReceived(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
+  char macStr[18];
+  snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+           info->src_addr[0], info->src_addr[1], info->src_addr[2],
+           info->src_addr[3], info->src_addr[4], info->src_addr[5]);
+
+  // Procesar el mensaje recibido
+  char message[len + 1];
+  memcpy(message, data, len);
+  message[len] = '\0'; // Asegurarse de que sea una cadena válida
+
+  // Guardar los datos del MASTER
+  if (masterCount < 10) { // Limitar a 10 MASTERS
+    strcpy(masters[masterCount].mac, macStr);
+    strcpy(masters[masterCount].message, message);
+    masterCount++;
+  }
+
+  // Mostrar los datos actuales
+  Serial.println("\nLista de MASTERS conectados:");
+  for (int i = 0; i < masterCount; i++) {
+    Serial.printf("MAC: %s, Mensaje: %s\n", masters[i].mac, masters[i].message);
+  }
+}
+
+void loop() {
+  // No se requiere código adicional aquí
+}
+
+
+***********************************************
+
+Código del MASTER
+Cada transmisor envía su mensaje con un número único y el tiempo cuando el cronómetro está detenido.
+
+CPP-P
+
+Copiar código
+#include <esp_now.h>
+#include <WiFi.h>
+
+// Dirección MAC del receptor (SLAVE)
+// Reemplaza con la dirección MAC real del receptor
+uint8_t slaveAddress[] = {0xXX, 0xXX, 0xXX, 0xXX, 0xXX, 0xXX};
+
+// Variables del cronómetro
+unsigned long startTime = 0;
+bool running = false;
+
+void setup() {
+  Serial.begin(115200);
+  Serial.println("Inicializando ESP-NOW...");
+
+  // Configurar Wi-Fi en modo Station
+  WiFi.mode(WIFI_STA);
+
+  // Inicializar ESP-NOW
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("Error al inicializar ESP-NOW");
+    return;
+  }
+  Serial.println("ESP-NOW inicializado correctamente.");
+
+  // Configurar el receptor como par
+  esp_now_peer_info_t peerInfo = {};
+  memcpy(peerInfo.peer_addr, slaveAddress, 6);
+  peerInfo.channel = 0; // Canal predeterminado
+  peerInfo.encrypt = false;
+
+  if (esp_now_add_peer(&peerInfo) != ESP_OK) {
+    Serial.println("Error al añadir el receptor como par.");
+    return;
+  }
+  Serial.println("Receptor añadido como par.");
+}
+
+void loop() {
+  if (!running) {
+    Serial.println("Iniciando cronómetro...");
+    delay(3000); // Simulación de inicio
+    startTime = millis();
+    running = true;
+    Serial.println("Cronómetro iniciado.");
+  } else {
+    unsigned long elapsedTime = millis() - startTime;
+
+    // Detener el cronómetro después de 10 segundos (simulación)
+    if (elapsedTime > 10000) {
+      running = false;
+
+      // Formatear el mensaje
+      char message[50];
+      snprintf(message, sizeof(message), "Crono Nº 01, Tiempo: %lu ms", elapsedTime);
+
+      // Enviar el mensaje al receptor
+      esp_err_t result = esp_now_send(slaveAddress, (uint8_t *)message, strlen(message) + 1);
+
+      if (result == ESP_OK) {
+        Serial.printf("Mensaje enviado: %s\n", message);
+      } else {
+        Serial.println("Error al enviar el mensaje.");
+      }
+
+      delay(5000); // Esperar antes de reiniciar
+    }
+  }
+}
+
+Pasos para configurar
+Configurar el SLAVE:
+
+Cargue el código del SLAVE en una placa ESP32.
+Asegúrese de obtener su dirección MAC y úsala en el código del MASTER.
+Configurar los MASTERS:
+
+Cargue el código del MASTER en cada placa.
+Asegúrate de asignar un número único en el mensaje:
+CPP-P
+
+Copiar código
+snprintf(message, sizeof(message), "Crono Nº 02, Tiempo: %lu ms", elapsedTime);
+Prueba:
+
+Conecta todas las placas.
+Observe los mensajes en el monitor serie del SLAVE.
+Salida Esperada
+En el SLAVE (Serie Monitor):
+
+rubí
+
+Copiar código
+Inicializando ESP-NOW...
+ESP-NOW inicializado correctamente.
+
+Lista de MASTERS conectados:
+MAC: XX:XX:XX:XX:XX:XX, Mensaje: Crono Nº 01, Tiempo: 12345 ms
+MAC: YY:YY:YY:YY:YY:YY, Mensaje: Crono Nº 02, Tiempo: 54321 ms
+...
+En cada MASTER (Monitor Serie):
+
+yaml
+
+Copiar código
+Inicializando ESP-NOW...
+ESP-NOW inicializado correctamente.
+Iniciando cronómetro...
+Cronómetro iniciado.
+Mensaje enviado: Crono Nº 01, Tiempo: 12345 ms
+Este diseño permite agregar hasta 10 MASTERS y manejar los datos en el SLAVE de forma organizada.
+¡Prueba estos códigos y avísame si necesitas más ajustes! 😊
+
+
+Tú dijiste:
+El SLAVE y los MASTER se comunican con el código de ejemplo.
+Ahora hay que incluir en cada MASTER el código del cronometro que teníamos funcionando
+ChatGPT Plus
+
+
+¡Entendido! Vamos a combinar el cronómetro con la lógica de ESP-NOW para enviar el tiempo al SLAVE.
+Este código será un MASTER completo que muestra el tiempo en una matriz LED y lo envía al SLAVE cuando el cronómetro se detiene.
+**
+**
+**	A PARTIR DE AQUI TODOS LOS INTENTOS FALLARON
+
+Tú dijiste:
+No hay error al compilar, el mensaje HOLA aparece en la pantalla a continuación un signo extraño y se apaga todo. .
+En el monitor serie aparecen estos mensajes: . Inicializando ESP-NOW... 
+ESP-NOW inicializado correctamente. 
+Inicializando ESP-NOW... ESP-NOW inicializado correctamente. .
+ 
+Tú dijiste:
+Al cargar el último código, se estropea el puerto serie de ESP32 y el Arduino IDE se cuelga. 
+Hay que apagar la PC, con la herramienta de recuperación muestra este código de error: Error
+: Cabezal de paquete no válido (0x80): Posible ruido serial o corrupción.
+
+
+****	HASTA AQUI EL RESUMEN DE LOS MULTIPLES INTENTOS  *****
+
+TE AJUNTO EL FICHERO DEL CRONOMETRO QUE HAY QUE IMPLEMENTAR EN LOS MODULOS:
+
+
+#include <esp_now.h>
+#include <WiFi.h>
+#include <MD_Parola.h>
+#include <MD_MAX72XX.h>
+#include <SPI.h>
+#include <Bounce2.h>
+#include <Ticker.h>
+
+#define DATA_PIN    11 // Pin de datos (GPIO23)
+#define CLK_PIN     12  // Pin de reloj (GPIO18)
+#define CS_PIN      10   // Pin de selección (GPIO5)
+
+#define START_BUTTON_PIN  19  // Pulsador de inicio (GPIO19)
+#define STOP_BUTTON_PIN   21  // Pulsador de parada (GPIO21)
+#define LED_START_PIN     4   // LED de inicio (GPIO4)
+#define LED_STOP_PIN      2   // LED de parada (GPIO2)
+
+// Definir el número total de matrices de 8x8 (4 matrices)
+#define NUM_MATRICES 4
+
+// Definir el tipo de hardware: FC16-HW
+#define HARDWARE_TYPE MD_MAX72XX::FC16_HW
+
+// Crear los objetos MD_Parola y MD_MAX72XX
+MD_Parola mx = MD_Parola(HARDWARE_TYPE, DATA_PIN, CLK_PIN, CS_PIN, NUM_MATRICES);
+MD_MAX72XX mxControl = MD_MAX72XX(HARDWARE_TYPE, DATA_PIN, CLK_PIN, CS_PIN, NUM_MATRICES);
+
+// Pines para los pulsadores y LEDs
+#define START_BUTTON_PIN  19//40
+#define STOP_BUTTON_PIN   21//41
+#define LED_START_PIN     25
+#define LED_STOP_PIN      26
+
+// Variables del cronómetro
+volatile int deciseconds = 0;
+volatile int seconds = 0;
+volatile int minutes = 0;
+volatile bool running = false;
+volatile bool countdownFinished = false;
+
+// Crear objetos Bounce para el debounce de los botones
+Bounce startButton = Bounce();
+Bounce stopButton = Bounce();
+
+// Crear un objeto Ticker
+Ticker ticker;
+
+// Patrones de dígitos personalizados (8x5)
+byte digits[10][5] = {
+  {0x7E, 0x81, 0x81, 0x81, 0x7E},
+  {0x00, 0x82, 0xFF, 0x80, 0x00},
+  {0xC2, 0xA1, 0x91, 0x89, 0x86},
+  {0x42, 0x81, 0x89, 0x89, 0x76},
+  {0x18, 0x14, 0x12, 0xFF, 0x10},
+  {0x4F, 0x89, 0x89, 0x89, 0x71},
+  {0x7E, 0x89, 0x89, 0x89, 0x72},
+  {0x01, 0x01, 0xF1, 0x09, 0x07},
+  {0x76, 0x89, 0x89, 0x89, 0x76},
+  {0x4E, 0x91, 0x91, 0x91, 0x7E}
+};
+
+// Prototipos de funciones
+void drawDigit(int digit, int position);
+void incrementTime();
+void resetTimer();
+void startCountdown();
+void stopTimer();
+void displayTime();
+
+void setup() {
+  // Configuración de pines
+  pinMode(START_BUTTON_PIN, INPUT_PULLUP);
+  pinMode(STOP_BUTTON_PIN, INPUT_PULLUP);
+  pinMode(LED_START_PIN, OUTPUT);
+  pinMode(LED_STOP_PIN, OUTPUT);
+
+  // Inicializar LEDs
+  digitalWrite(LED_START_PIN, LOW);
+  digitalWrite(LED_STOP_PIN, LOW);
+
+  // Configurar botones con debounce
+  startButton.attach(START_BUTTON_PIN);
+  startButton.interval(25);
+  stopButton.attach(STOP_BUTTON_PIN);
+  stopButton.interval(25);
+
+  // Inicializar MAX7219
+  mx.begin();
+  mxControl.begin();
+  mx.setIntensity(8);
+  mxControl.clear();
+
+  // Mensaje inicial
+  mx.displayText("CRONO_01", PA_CENTER, 90, 500, PA_SCROLL_LEFT);
+  while (!mx.displayAnimate()) {}
+  mxControl.clear();
+
+  mx.displayText("AGUSTINOS GR", PA_CENTER, 90, 1200, PA_SCROLL_LEFT);
+  while (!mx.displayAnimate()) {}
+  mxControl.clear();
+
+  // Mostrar el número 3 en espera
+  drawDigit(3, 14);
+
+  // Configurar Ticker
+  ticker.attach_ms(10, incrementTime);
+
+  // Inicializar puerto serie
+  Serial.begin(115200);
+  Serial.println("Sistema iniciado correctamente.");
+}
+
+void loop() {
+  startButton.update();
+  stopButton.update();
+/**/
+  // Manejo de botones
+  if (startButton.fell() && !running && !countdownFinished) {
+    resetTimer();
+    startCountdown();
+  }
+
+  if (stopButton.fell() && running) {
+    stopTimer();
+  }
+
+  if (running) {
+    displayTime();
+  }
+}
+
+void resetTimer() {
+  deciseconds = 0;
+  seconds = 0;
+  minutes = 0;
+  mxControl.clear();
+}
+
+void startCountdown() {
+  for (int i = 3; i >= 0; i--) {
+    mxControl.clear();
+    drawDigit(i, 14);
+    delay(1000);
+    mxControl.clear();
+  }
+  countdownFinished = true;
+  Serial.println("Crono * 01 * iniciado.");
+  running = true;
+  digitalWrite(LED_START_PIN, HIGH);
+  digitalWrite(LED_STOP_PIN, LOW);
+}
+
+void stopTimer() {
+  running = false;
+  countdownFinished = false;
+  digitalWrite(LED_START_PIN, LOW);
+  digitalWrite(LED_STOP_PIN, HIGH);
+  Serial.println("Crono * 01 * detenido.");
+ // Enviar los datos del cronómetro al puerto serie
+      Serial.print("Tiempo: ");
+      Serial.print(minutes);
+      Serial.print(":");
+      Serial.print(seconds);
+      Serial.print(":");
+      Serial.println(deciseconds);
+}
+
+void incrementTime() {
+  if (running) {
+    deciseconds++;
+    if (deciseconds >= 100) {
+      deciseconds = 0;
+      seconds++;
+    }
+    if (seconds >= 60) {
+      seconds = 0;
+      minutes++;
+    }
+    if (minutes >= 99) {
+      minutes = 0;
+    }
+  }
+}
+// DISTRIBUIR LOS DIGITOS 8x5 EN MATTRIZ
+// MAX7219 4 MODULOS 8x8 LED
+// LAS FILAS SE CUENTAN DESDE 0 AL 31
+// FOMRMATO: MINUTOS XX XX :  SEPARADOR DOS PUNTOS 
+// SEGUNDOS XX XX DECIMAS X
+// LAS CENTESIMAS SE USAN PARA CONTAR PERO NO SE DIBUJAN
+
+void displayTime() {
+  drawDigit(minutes / 10, 27); // Decenas de minutos
+  drawDigit(minutes % 10, 21); // Unidades de minutos
+  mxControl.setColumn(19, B00100100); // Dos puntos
+  drawDigit(seconds / 10, 13);   // Decenas de segundos
+  drawDigit(seconds % 10, 7);   // Unidades de segundos
+  drawDigit(deciseconds / 10, 0); // Décimas
+  // mxControl.setColumn(9, B00100100); // Dos puntos 
+}
+
+void drawDigit(int digit, int position) {
+  for (int i = 0; i < 5; i++) {
+    mxControl.setColumn(position + 4 - i, digits[digit][i]);
+  }
+}
+
+REPARTE BESITOS Y ABRAZOS PARA TODOS.
+
+EL TITO NONO
