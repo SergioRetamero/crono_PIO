@@ -11,7 +11,7 @@
 #include <Ticker.h>
 
 // Número de nodo = 0 receptor, 1 a 10 = transmisores
-const uint8_t NODO = 6; 
+const uint8_t NODO = 0;
 // Cambiar con la dirección MAC del receptor
 uint8_t broadcastAddress[] = {0x3c, 0x84, 0x27, 0xf2, 0x7d, 0xcc};
 
@@ -70,8 +70,8 @@ uint8_t baseMac[6];
 
 // Variables del cronómetro
 volatile int deciseconds = 0;
-volatile int seconds = 0;
-volatile int minutes = 0;
+volatile int seconds = 30;
+volatile int minutes = 59;
 volatile bool running = false;
 volatile bool countdownFinished = true;
 
@@ -222,7 +222,7 @@ void loop()
   uint32_t now = millis();
   // if (seconds != lastSeconds && NODO > 0) { // Actualizar cada 1 segundo
   //   lastSeconds = seconds;
-  if (now - lastTime >= 50+random(5) && NODO > 0)
+  if (now - lastTime >= 50 + random(5) && NODO > 0)
   { // Los satélites envían cada cierto tiempo los datos de tiempo
     lastTime = now;
     enviarDatosTiempo();
@@ -233,7 +233,7 @@ void loop()
     // Imprime lista tiempos recibidos
     Serial.println("----------------------------");
     D(Serial.printf("Centro Tiempo: %02d:%02d.%02d\n",
-                  minutes, seconds, deciseconds);)
+                    minutes, seconds, deciseconds);)
     for (int i = 0; i < 10; i++)
     {
       if (datosRecibidos[i].id == 0)
@@ -245,9 +245,9 @@ void loop()
                     datosRecibidos[i].seconds,
                     datosRecibidos[i].deciseconds);
       D(Serial.printf("\tMAC: %02x:%02x:%02x:%02x:%02x:%02x",
-                    datosRecibidos[i].mac_addr[0], datosRecibidos[i].mac_addr[1],
-                    datosRecibidos[i].mac_addr[2], datosRecibidos[i].mac_addr[3],
-                    datosRecibidos[i].mac_addr[4], datosRecibidos[i].mac_addr[5]);)
+                      datosRecibidos[i].mac_addr[0], datosRecibidos[i].mac_addr[1],
+                      datosRecibidos[i].mac_addr[2], datosRecibidos[i].mac_addr[3],
+                      datosRecibidos[i].mac_addr[4], datosRecibidos[i].mac_addr[5]);)
       Serial.println("");
       //}
     }
@@ -266,7 +266,8 @@ void loop()
   {
     if (running)
     {
-    if(NODO==0 ) enviarMensajeoATodos(IDSTOP);
+      if (NODO == 0)
+        enviarMensajeoATodos(IDSTOP);
       stopTimer();
     }
     /* else if (countdownFinished && stopButton.previousDuration()>1000)
@@ -277,9 +278,10 @@ void loop()
   }
 
   // Se ha pulsado stop más de 2 segundos
-  if(stopButton.rose() && stopButton.previousDuration()>2000 && NODO==0)
+  if (stopButton.rose() && stopButton.previousDuration() > 2000 && NODO == 0)
   {
-    if(NODO==0 ) enviarMensajeoATodos(IDRESET);
+    if (NODO == 0)
+      enviarMensajeoATodos(IDRESET);
     resetTimer();
     displayTime();
   }
@@ -303,8 +305,8 @@ void loop()
 void resetTimer()
 {
   deciseconds = 0;
-  seconds = 0;
-  minutes = 0;
+  seconds = 30;
+  minutes = 59;
   mxControl.clear();
   // reseteaDatosReceptor();
 }
@@ -432,12 +434,39 @@ void incrementTime()
 
 void displayTime()
 {
-  drawDigit(minutes / 10, 27);        // Decenas de minutos
-  drawDigit(minutes % 10, 21);        // Unidades de minutos
-  mxControl.setColumn(19, B00100100); // Dos puntos
-  drawDigit(seconds / 10, 13);        // Decenas de segundos
-  drawDigit(seconds % 10, 7);         // Unidades de segundos
-  drawDigit(deciseconds / 10, 0);     // Décimas
+  static int prevDeci = 0;
+  static int cambioHora = 0;
+  if (prevDeci == deciseconds)
+    return;
+  prevDeci = deciseconds;
+
+  // mxControl.clear();
+  int pos = 27;
+  if (minutes > 59)
+  {
+    if(cambioHora != minutes/60)
+    {
+      cambioHora = minutes/60;
+      mxControl.clear();
+    }
+    drawDigit((minutes) / 60, pos); // Unidades de hora 27
+    pos -= 1;
+    mxControl.setColumn(pos, B00100100); // Dos puntos 19
+    pos -= 6;
+  }
+  drawDigit((minutes % 60) / 10, pos); // Decenas de minutos 27
+  pos -= 6;
+  drawDigit((minutes % 60) % 10, pos); // Unidades de minutos 21
+  pos -= 2;
+  mxControl.setColumn(pos, B00100100); // Dos puntos 19
+  pos -= 6;
+  drawDigit(seconds / 10, pos); // Decenas de segundos 13
+  pos -= 6;
+  drawDigit(seconds % 10, pos); // Unidades de segundos 7
+  if (minutes > 59)
+    return; // Mostrando horas, no se ven las décimas
+  pos -= 7;
+  drawDigit(deciseconds / 10, pos); // Décimas
   // mxControl.setColumn(9, B00100100); // Dos puntos
 }
 
@@ -539,7 +568,8 @@ bool procesaMensaje(const uint8_t *mac_addr, const uint8_t *incomingData, int le
     {
       stopTimer();
     }
-  } else if (myMsg.msg == IDRESET)
+  }
+  else if (myMsg.msg == IDRESET)
   { // Mensaje stop
     DP("Msg Reset");
     resetTimer();
