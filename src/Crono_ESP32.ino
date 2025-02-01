@@ -70,8 +70,8 @@ uint8_t baseMac[6];
 
 // Variables del cronómetro
 volatile int deciseconds = 0;
-volatile int seconds = 30;
-volatile int minutes = 59;
+volatile int seconds = 0;
+volatile int minutes = 0;
 volatile bool running = false;
 volatile bool countdownFinished = true;
 
@@ -305,8 +305,8 @@ void loop()
 void resetTimer()
 {
   deciseconds = 0;
-  seconds = 30;
-  minutes = 59;
+  seconds = 0;
+  minutes = 0;
   mxControl.clear();
   // reseteaDatosReceptor();
 }
@@ -419,7 +419,7 @@ void incrementTime()
       seconds = 0;
       minutes++;
     }
-    if (minutes >= 99)
+    if (minutes >= 9*60) // Limite de reloj 9 horas
     {
       minutes = 0;
     }
