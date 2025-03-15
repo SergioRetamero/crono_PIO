@@ -3,6 +3,10 @@
 		{
 			"name": "crono_PIO",
 			"path": "."
+		},
+		{
+			"name": "ESP32 S3 OLED 7735",
+			"path": "../../ESP32 S3 OLED 7735"
 		}
 	],
 	"settings": {}
