@@ -1,19 +1,25 @@
 //  DIA 3 DE ENERO  OJO AL COMPILAR ESP32-S3,
 // EN EL GESTOR DE PLACAS BOARD 3.0.5, AL ENCHUFAR PULSAR BOOT
 // CAMBIAR NUMERO DE CRONO EN MENSAJES MATRIZ Y SERIAL
-#include <esp_now.h>
-#include <WiFi.h>
-#include <esp_wifi.h>
+
+#include <ArduinoModbus.h>
+#include <ArduinoRS485.h>
+
 #include <MD_Parola.h>
 #include <MD_MAX72XX.h>
 #include <SPI.h>
 #include <Bounce2.h>
-#include <Ticker.h>
 
 // Número de nodo = 0 receptor, 1 a 10 = transmisores
 const uint8_t NODO = 0;
-// Cambiar con la dirección MAC del receptor
-uint8_t broadcastAddress[] = {0x3c, 0x84, 0x27, 0xf2, 0x7d, 0xcc};
+
+const int numSlaves = 20;       // Número de esclavos
+const int baudRate = 9600;      // Velocidad de comunicación
+const int modbusAddress = 100;    // Dirección base para los esclavos
+
+const int pinTX = 1;
+const int pinDE = 7;
+RS485Class puertoRS485(Serial1, pinTX, pinDE, -1);
 
 //#define DEBUG
 
@@ -425,13 +431,13 @@ void incrementTime()
     }
   }
 }
+
+
 // DISTRIBUIR LOS DIGITOS 8x5 EN MATTRIZ
 // MAX7219 4 MODULOS 8x8 LED
 // LAS FILAS SE CUENTAN DESDE 0 AL 31
 // FOMRMATO: MINUTOS XX XX :  SEPARADOR DOS PUNTOS
 // SEGUNDOS XX XX DECIMAS X
-// LAS CENTESIMAS SE USAN PARA CONTAR PERO NO SE DIBUJAN
-
 void displayTime()
 {
   static int prevDeci = 0;
