@@ -10,36 +10,82 @@
 #include <Bounce2.h>
 #include <Ticker.h>
 
-// Número de nodo = 0 receptor, 1 a 10 = transmisores
+const int numSlaves = 12;       // Número de esclavos
+
+// Número de nodo = 0 receptor, 1 a numSlaves = transmisores
 const uint8_t NODO = 0;
 // Cambiar con la dirección MAC del receptor
 uint8_t broadcastAddress[] = {0x3c, 0x84, 0x27, 0xf2, 0x7d, 0xcc};
 
-//#define DEBUG
+#define DEBUG
 
 #ifdef DEBUG
 #define D(x) x                  /// Shorthand for Debug
 #define DP(x) Serial.println(x) /// Shorthand for Deug serial println
+#define DF(...) {char text[100]; sprintf(text,__VA_ARGS__); Serial.print(text);} /// Shorthand for Debug serial printf
+
 #else
 #define D(x)
 #define DP(x)
+#define DF(x)
 #endif
 
-#define DATA_PIN 11 // Pin de datos (GPIO23)
-#define CLK_PIN 12  // Pin de reloj (GPIO18)
-#define CS_PIN 10   // Pin de selección (GPIO5)
+///////////////////////
+// Definicion pines 
+#define MINID1 1
+#define DOITESP32 2
+#define ESP32S3 3
+#define MODULO MINID1 // Poner 
+
+#if MODULO == MINID1
+#define CLK_PIN 32 //16//  18//4  // Pin de reloj (GPIO18)
+#define CS_PIN 25  //17 //  5 Pin de selección (GPIO5)
+#define DATA_PIN 27 //18 //  23//6 // Pin de datos (GPIO23)
 
 // Pines para los pulsadores y LEDs
-#define START_BUTTON_PIN 19 // Pulsador de inicio (GPIO19)
-#define STOP_BUTTON_PIN 21  // Pulsador de parada (GPIO21)
-#define LED_START_PIN 4     // LED de inicio (GPIO4)
-#define LED_STOP_PIN 2      // LED de parada (GPIO2)
+#define START_BUTTON_PIN 16 //4  // 2 // Pulsador de inicio (GPIO19)
+#define STOP_BUTTON_PIN 17 //5  // 0  // Pulsador de parada (GPIO21)
+//#define GENSTART_BUTTON_PIN 8 //  Pulsador de inicio general
+//#define GENSTOP_BUTTON_PIN 3 //  Pulsador de parada general
+
+// Pines para el RS485
+const int pinTX = 13;//17;
+const int pinRX = 14;//18;
+const int pinDE = 4;
+
+#elif MODULO == DOITESP32
+#define CLK_PIN 18 // Pin de reloj (GPIO18)
+#define CS_PIN 5  // Pin de selección (GPIO5)
+#define DATA_PIN 23 //18 //  23//6 // Pin de datos (GPIO23)
+// Pines para los pulsadores y LEDs
+#define START_BUTTON_PIN 26 //4  // 2 // Pulsador de inicio (GPIO19)
+#define STOP_BUTTON_PIN 27 //5  // 0  // Pulsador de parada (GPIO21)
+// Pines para el RS485
+const int pinTX = 13;//17;
+const int pinRX = 14;//18;
+const int pinDE = 4;
+#elif MODULO == ESP32S3
+#define CLK_PIN 18 // Pin de reloj (GPIO18)
+#define CS_PIN 5  // Pin de selección (GPIO5)
+#define DATA_PIN 24 //18 //  23//6 // Pin de datos (GPIO23)
+// Pines para los pulsadores y LEDs
+#define START_BUTTON_PIN 26 //4  // 2 // Pulsador de inicio (GPIO19)
+#define STOP_BUTTON_PIN 27 //5  // 0  // Pulsador de parada (GPIO21)
+// Pines para el RS485
+const int pinTX = 13;//17;
+const int pinRX = 14;//18;
+const int pinDE = 4;
+#endif
 
 // Definir el número total de matrices de 8x8 (4 matrices)
 #define NUM_MATRICES 4
 
 // Definir el tipo de hardware: FC16-HW
 #define HARDWARE_TYPE MD_MAX72XX::FC16_HW
+// Crear los objetos MD_Parola y MD_MAX72XX
+MD_Parola mx = MD_Parola(HARDWARE_TYPE, DATA_PIN, CLK_PIN, CS_PIN, NUM_MATRICES);
+MD_MAX72XX mxControl = MD_MAX72XX(HARDWARE_TYPE, DATA_PIN, CLK_PIN, CS_PIN, NUM_MATRICES);
+
 
 //////////////////////////////////////////
 // Variables de comunicación ESP-NOW
@@ -62,7 +108,7 @@ typedef struct
   uint8_t mac_addr[6];
 } datoTiempo;
 
-datoTiempo datosRecibidos[10]; // Aquí se guardan los datos recibidos
+datoTiempo datosRecibidos[numSlaves]; // Aquí se guardan los datos recibidos
 // Interface con el receptor
 esp_now_peer_info_t peerInfo;
 
@@ -75,10 +121,6 @@ volatile int minutes = 0;
 volatile bool running = false;
 volatile bool countdownFinished = true;
 
-// Crear los objetos MD_Parola y MD_MAX72XX
-MD_Parola mx = MD_Parola(HARDWARE_TYPE, DATA_PIN, CLK_PIN, CS_PIN, NUM_MATRICES);
-MD_MAX72XX mxControl = MD_MAX72XX(HARDWARE_TYPE, DATA_PIN, CLK_PIN, CS_PIN, NUM_MATRICES);
-
 // Crear objetos Bounce para el debounce de los botones
 Bounce startButton = Bounce();
 Bounce stopButton = Bounce();
@@ -87,7 +129,7 @@ Bounce stopButton = Bounce();
 Ticker ticker;
 
 // Patrones de dígitos personalizados (8x5)
-byte digits[10][5] = {
+byte digits[numSlaves][5] = {
     {0x7E, 0x81, 0x81, 0x81, 0x7E},
     {0x00, 0x82, 0xFF, 0x80, 0x00},
     {0xC2, 0xA1, 0x91, 0x89, 0x86},
@@ -122,12 +164,6 @@ void setup()
   // Configuración de pines
   pinMode(START_BUTTON_PIN, INPUT_PULLUP);
   pinMode(STOP_BUTTON_PIN, INPUT_PULLUP);
-  pinMode(LED_START_PIN, OUTPUT);
-  pinMode(LED_STOP_PIN, OUTPUT);
-
-  // Inicializar LEDs
-  digitalWrite(LED_START_PIN, HIGH);
-  digitalWrite(LED_STOP_PIN, HIGH);
 
   // Configurar botones con debounce
   startButton.attach(START_BUTTON_PIN);
@@ -196,9 +232,6 @@ void setup()
   mx.displayClear();
   // mxControl.clear();
 
-  digitalWrite(LED_START_PIN, LOW);
-  digitalWrite(LED_STOP_PIN, HIGH);
-
   // Mostrar el número 3 en espera
   // drawDigit(3, 14);
   // Muestra el nombre del dispositivo
@@ -234,7 +267,7 @@ void loop()
     Serial.println("----------------------------");
     D(Serial.printf("Centro Tiempo: %02d:%02d.%02d\n",
                     minutes, seconds, deciseconds);)
-    for (int i = 0; i < 10; i++)
+    for (int i = 0; i < numSlaves; i++)
     {
       if (datosRecibidos[i].id == 0)
         continue; //{
@@ -319,8 +352,6 @@ void startCountdown()
   countdownFinished = false;
   count = 3;
   lastTime = millis();
-  digitalWrite(LED_START_PIN, HIGH);
-  digitalWrite(LED_STOP_PIN, LOW);
 
   mxControl.clear();
   drawDigit(3, 14);
@@ -340,7 +371,6 @@ void showCountdown()
   {
     lastState = !lastState;
     lastBlink = now;
-    digitalWrite(LED_START_PIN, lastState);
   }
 
   // Manda mensaje de inicio de cuenta atrás desde el centro
@@ -362,7 +392,6 @@ void showCountdown()
     {
       // Fin cuenta atrás
       finishCountdown();
-      digitalWrite(LED_START_PIN, HIGH);
     }
   }
 }
@@ -374,11 +403,6 @@ void finishCountdown()
 
   D(Serial.printf("Crono * %d * iniciado.\n", NODO);)
   running = true;
-  // Se debe encender el LED de inicio y apagar el de parada
-  digitalWrite(LED_START_PIN, LOW);
-  digitalWrite(LED_STOP_PIN, LOW);
-  // digitalWrite(LED_START_PIN, LOW);
-  // digitalWrite(LED_STOP_PIN, HIGH);
 }
 
 void stopTimer()
@@ -391,8 +415,6 @@ void stopTimer()
 
   running = false;
   countdownFinished = true;
-  digitalWrite(LED_START_PIN, LOW);
-  digitalWrite(LED_STOP_PIN, HIGH);
 
   // Enviar los datos del cronómetro al puerto serie
   D(Serial.printf("Crono * %d * detenido.\n", NODO);
@@ -500,7 +522,7 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *incomingData, int len)
     return; // Error tamaño
   datoTiempo myData;
   memcpy(&myData, incomingData, sizeof(myData));
-  if (myData.id < 1 || myData.id > 10)
+  if (myData.id < 1 || myData.id > numSlaves)
     return; // Error rango id
 
   // Si es centro, actualizar la estructura con los nuevos datos recibidos
@@ -582,7 +604,7 @@ bool procesaMensaje(const uint8_t *mac_addr, const uint8_t *incomingData, int le
 // Pone todos los datos recibidos a 0
 void reseteaDatosReceptor()
 {
-  for (int i = 0; i < 10; i++)
+  for (int i = 0; i < numSlaves; i++)
   {
     datosRecibidos[i].id = 0;
     datosRecibidos[i].deciseconds = 0;
@@ -708,7 +730,7 @@ bool enviarMensajeoATodos(uint8_t msg)
     return false;
   }
 
-  for (int i = 0; i < 10; i++)
+  for (int i = 0; i < numSlaves; i++)
   {
     if (datosRecibidos[i].id == 0)
       continue;
@@ -728,7 +750,7 @@ bool enviarDatosTiempoATodos(uint8_t msg)
   }
 
   // enviarDatosTiempo();
-  for (int i = 0; i < 10; i++)
+  for (int i = 0; i < numSlaves; i++)
   {
     if (datosRecibidos[i].id == 0)
       continue;
