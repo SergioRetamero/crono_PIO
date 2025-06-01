@@ -4,11 +4,11 @@
 #include <esp_now.h>
 #include <WiFi.h>
 #include <esp_wifi.h>
+
 #include <MD_Parola.h>
 #include <MD_MAX72XX.h>
 #include <SPI.h>
 #include <Bounce2.h>
-#include <Ticker.h>
 
 const int numSlaves = 12;       // Número de esclavos
 
@@ -89,9 +89,10 @@ MD_MAX72XX mxControl = MD_MAX72XX(HARDWARE_TYPE, DATA_PIN, CLK_PIN, CS_PIN, NUM_
 
 //////////////////////////////////////////
 // Variables de comunicación ESP-NOW
-const uint8_t IDSTARTCOUNT = 99;
+const uint8_t IDSTARTCOUNT = 1;
 const uint8_t IDSTOP = 98;
 const uint8_t IDRESET = 97;
+const uint8_t IDSTART = 96;
 
 typedef struct
 {
@@ -105,6 +106,8 @@ typedef struct
   uint8_t deciseconds;
   uint8_t seconds;
   uint8_t minutes;
+  uint8_t estado;
+  uint8_t hours; // Añadido para mostrar horas
   uint8_t mac_addr[6];
 } datoTiempo;
 
@@ -118,15 +121,15 @@ uint8_t baseMac[6];
 volatile int deciseconds = 0;
 volatile int seconds = 0;
 volatile int minutes = 0;
+volatile int hours = 0; // Añadido para mostrar horas
 volatile bool running = false;
 volatile bool countdownFinished = true;
+uint32_t tiempoArranque = 0; // Tiempo de inicio del contador
+const uint8_t cuentaAtrasNumeroInicial = 3; // Número inicial para la cuenta atrás
 
 // Crear objetos Bounce para el debounce de los botones
 Bounce startButton = Bounce();
 Bounce stopButton = Bounce();
-
-// Crear un objeto Ticker
-Ticker ticker;
 
 // Patrones de dígitos personalizados (8x5)
 byte digits[numSlaves][5] = {
@@ -142,12 +145,14 @@ byte digits[numSlaves][5] = {
     {0x4E, 0x91, 0x91, 0x91, 0x7E}};
 
 // Prototipos de funciones
+void iniciaESPNow();
+void mensajeBienvenida();
 void drawDigit(int digit, int position);
 void incrementTime();
 void resetTimer();
 void startCountdown();
 void stopTimer();
-void displayTime();
+void displayTime( bool force = false);
 void OnDataRecv(const uint8_t *mac_addr, const uint8_t *incomingData, int len);
 void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status);
 bool procesaMensaje(const uint8_t *mac_addr, const uint8_t *incomingData, int len);
@@ -161,6 +166,9 @@ bool enviaPaquete(uint8_t *data, size_t len, uint8_t *mac_addr_tosend = nullptr)
 
 void setup()
 {
+  // Inicializar puerto serie
+  Serial.begin(115200);
+
   // Configuración de pines
   pinMode(START_BUTTON_PIN, INPUT_PULLUP);
   pinMode(STOP_BUTTON_PIN, INPUT_PULLUP);
@@ -171,83 +179,26 @@ void setup()
   stopButton.attach(STOP_BUTTON_PIN);
   stopButton.interval(25);
 
+  DP("Iniciando Cronómetro ESP32...");
+
   // Inicializar MAX7219
   mx.begin();
   mxControl.begin();
   mx.setIntensity(8);
   mxControl.clear();
+  DP("Iniciando pantalla...");
 
-  // Configurar Ticker
-  ticker.attach_ms(10, incrementTime);
-
-  // Inicializar puerto serie
-  Serial.begin(115200);
-
-  // Inicializar ESP-NOW
-  // Configurar el modo de Wi-Fi
-  WiFi.mode(WIFI_STA);
-  // Inicializar ESP-NOW
-  if (esp_now_init() != ESP_OK)
-  {
-    DP("Error al inicializar ESP-NOW");
-    return;
-  }
-
-  esp_err_t ret = esp_wifi_get_mac(WIFI_IF_STA, baseMac);
-  if (ret == ESP_OK)
-  {
-    D(Serial.printf("MAC: %02x:%02x:%02x:%02x:%02x:%02x\n",
-                    baseMac[0], baseMac[1], baseMac[2],
-                    baseMac[3], baseMac[4], baseMac[5]));
-  }
-  else
-  {
-    DP("Failed to read MAC address");
-  }
-
-  // Registrar la función de callback
-  // if(NODO == 0)
-  registraEmisor();
-  // else
-  registraReceptor();
-
-  // Inicializar estructuras de datos
-  reseteaDatosReceptor();
-
-  DP("Sistema iniciado correctamente.");
-
-  // Mensaje inicial
-  // mx.displayText("CRONO_01", PA_CENTER, 40, 500, PA_SCROLL_LEFT);
-  // while (!mx.displayAnimate()) {}
-  // mxControl.clear();
-  //  *****  BORRADO ENTRE MENSAJES
-  // mx.displayText("        ", PA_CENTER, 40, 90, PA_SCROLL_LEFT);
-  // while (!mx.displayAnimate()) {}
-  // mxControl.clear();
-
-  mx.displayText("AGUSTINOS GR", PA_CENTER, 40, 1200, PA_SCROLL_LEFT);
-  while (!mx.displayAnimate())
-  {
-  }
-  mx.displayClear();
-  // mxControl.clear();
-
-  // Mostrar el número 3 en espera
-  // drawDigit(3, 14);
-  // Muestra el nombre del dispositivo
-  char nombre[20];
-  nombreDispositivo(nombre);
-  mx.displayText(nombre, PA_CENTER, 40, 1200, PA_SCROLL_UP);
-  while (!mx.displayAnimate())
-  {
-  }
+  iniciaESPNow();
+  DP("Sistema ESP-NOW iniciado correctamente.");
+  
+  mensajeBienvenida();
 }
 
 /////////////////////////////////////////
 void loop()
 {
-  startButton.update();
-  stopButton.update();
+  incrementTime();
+
 
   // Prueba de envío cada 1 segundo
   // static uint32_t lastSeconds = 0;
@@ -287,52 +238,60 @@ void loop()
     Serial.println("");
   }
 
-  /**/
+  compruebaBotones();
+
+  actualizaPantalla();
+
+}
+
+void compruebaBotones()
+{
+  startButton.update();
+  stopButton.update();
+
   // Manejo de botones
   if (startButton.fell() && !running && countdownFinished)
   {
+    DP("Boton inicio pulsado");
     resetTimer();
     startCountdown();
   }
 
-  if (stopButton.fell())
+  if (stopButton.fell()  && running)
   {
-    if (running)
-    {
-      if (NODO == 0)
-        enviarMensajeoATodos(IDSTOP);
-      stopTimer();
-    }
-    /* else if (countdownFinished && stopButton.previousDuration()>1000)
-    {
-      resetTimer();
-      displayTime();
-    } */
+    DP("Boton parada pulsado");
+    if (NODO == 0)
+      enviarMensajeoATodos(IDSTOP);
+    stopTimer();
   }
 
   // Se ha pulsado stop más de 2 segundos
   if (stopButton.rose() && stopButton.previousDuration() > 2000 && NODO == 0)
   {
-    if (NODO == 0)
-      enviarMensajeoATodos(IDRESET);
+    DP("Boton parada pulsado más de 2 segundos");
+    enviarMensajeoATodos(IDRESET);
     resetTimer();
-    displayTime();
+    displayTime(true);
   }
+}
 
-  if (running)
-  {
-    static uint32_t lastDeciSeconds = 0;
-    if (deciseconds != lastDeciSeconds)
-    { // Actualizar solo cuando sea necesario
-      lastDeciSeconds = deciseconds;
-      displayTime();
-    }
-  }
+void incrementTime()
+{
+static uint32_t lastIncrementTime = 0;
+uint32_t currentTime = millis();
 
-  if (!countdownFinished)
-  { // Mostrar cuenta regresiva sin bloquear el micro
-    showCountdown();
-  }
+  if(lastIncrementTime == 0) lastIncrementTime = currentTime;
+  if (!running) return; // No actualiza cuando está parado
+  if(tiempoArranque == 0) tiempoArranque = currentTime/10;
+  
+  //if(currentTime - lastIncrementTime < 50) return; // Actualiza cada 50 ms
+  //lastIncrementTime = currentTime;
+
+  uint32_t elapsedTime = currentTime/10 - tiempoArranque; // Décimas de segundo (32 bits)
+  deciseconds = (elapsedTime) % 100;
+  seconds = (elapsedTime/100) % 60;
+  minutes = (elapsedTime/6000) % 60;
+  hours = (elapsedTime/360000) % 10;
 }
 
 void resetTimer()
@@ -340,21 +299,22 @@ void resetTimer()
   deciseconds = 0;
   seconds = 0;
   minutes = 0;
+  hours = 0;
   mxControl.clear();
   // reseteaDatosReceptor();
 }
 
-uint8_t count = 0;
+uint8_t contAtras = 0;
 uint32_t lastTime = 0;
 
 void startCountdown()
 {
   countdownFinished = false;
-  count = 3;
+  contAtras = cuentaAtrasNumeroInicial;
   lastTime = millis();
 
   mxControl.clear();
-  drawDigit(3, 14);
+  drawDigit(contAtras, 14);
   DP("Inicio cuenta atrás");
 
   enviarMensajeoATodos(IDSTARTCOUNT);
@@ -382,11 +342,11 @@ void showCountdown()
   if (now - lastTime >= 1000)
   {
     lastTime = now;
-    if (count > 1)
+    if (contAtras > 1)
     {
-      count--;
+      contAtras--;
       mxControl.clear();
-      drawDigit(count, 14);
+      drawDigit(contAtras, 14);
     }
     else
     {
@@ -396,13 +356,20 @@ void showCountdown()
   }
 }
 
+void startCrono()
+{
+  DF("Crono * %d * iniciado.\n", NODO);
+
+  running = true;
+  tiempoArranque = millis()/10;
+}
+
 void finishCountdown()
 {
   countdownFinished = true;
   mxControl.clear();
 
-  D(Serial.printf("Crono * %d * iniciado.\n", NODO);)
-  running = true;
+  startCrono();
 }
 
 void stopTimer()
@@ -417,67 +384,50 @@ void stopTimer()
   countdownFinished = true;
 
   // Enviar los datos del cronómetro al puerto serie
-  D(Serial.printf("Crono * %d * detenido.\n", NODO);
-    Serial.print("Tiempo: ");
-    Serial.print(minutes);
-    Serial.print(":");
-    Serial.print(seconds);
-    Serial.print(":");
-    Serial.println(deciseconds);)
+  DF("Crono * %d * detenido.\n", NODO);
+  DF("Tiempo: %02d:%02d:%02d.%02d\n", hours, minutes, seconds, deciseconds);
+
 }
 
-void incrementTime()
-{
-  if (running)
-  {
-    deciseconds++;
-    if (deciseconds >= 100)
-    {
-      deciseconds = 0;
-      seconds++;
-    }
-    if (seconds >= 60)
-    {
-      seconds = 0;
-      minutes++;
-    }
-    if (minutes >= 9*60) // Limite de reloj 9 horas
-    {
-      minutes = 0;
-    }
-  }
-}
-// DISTRIBUIR LOS DIGITOS 8x5 EN MATTRIZ
-// MAX7219 4 MODULOS 8x8 LED
-// LAS FILAS SE CUENTAN DESDE 0 AL 31
-// FOMRMATO: MINUTOS XX XX :  SEPARADOR DOS PUNTOS
-// SEGUNDOS XX XX DECIMAS X
-// LAS CENTESIMAS SE USAN PARA CONTAR PERO NO SE DIBUJAN
 
-void displayTime()
+//////////////////////////////////
+// Funciones matriz puntos
+
+void displayTime(bool force)
 {
   static int prevDeci = 0;
   static int cambioHora = 0;
-  if (prevDeci == deciseconds)
+  if (prevDeci == deciseconds/9 && !force)
     return;
-  prevDeci = deciseconds;
+  prevDeci = deciseconds/9;
 
-  // mxControl.clear();
-  int pos = 27;
-  if (minutes > 59)
+  static uint32_t lastCycle = 0;
+  uint32_t currentTime = millis();
+  if( currentTime-lastCycle > 5000)
   {
-    if(cambioHora != minutes/60)
+    lastCycle = currentTime;
+    mxControl.clear();
+  }
+  //mxControl.clear();
+
+  int pos = 27;
+  if (hours > 0)
+  {
+    if(cambioHora != hours)
     {
-      cambioHora = minutes/60;
+      cambioHora = hours;
       mxControl.clear();
     }
-    drawDigit((minutes) / 60, pos); // Unidades de hora 27
+    drawDigit(hours % 10, pos); // Unidades de hora 27
     pos -= 1;
     mxControl.setColumn(pos, B00100100); // Dos puntos 19
     pos -= 6;
   }
-  drawDigit((minutes % 60) / 10, pos); // Decenas de minutos 27
-  pos -= 6;
+  if(minutes>10 || hours > 0)  // muestra centesimas y no decenas deminutos
+  {
+    drawDigit((minutes % 60) / 10, pos); // Decenas de minutos 27
+    pos -= 6;
+  }
   drawDigit((minutes % 60) % 10, pos); // Unidades de minutos 21
   pos -= 2;
   mxControl.setColumn(pos, B00100100); // Dos puntos 19
@@ -485,11 +435,16 @@ void displayTime()
   drawDigit(seconds / 10, pos); // Decenas de segundos 13
   pos -= 6;
   drawDigit(seconds % 10, pos); // Unidades de segundos 7
-  if (minutes > 59)
+  if ( hours > 0)
     return; // Mostrando horas, no se ven las décimas
   pos -= 7;
-  drawDigit(deciseconds / 10, pos); // Décimas
-  // mxControl.setColumn(9, B00100100); // Dos puntos
+  drawDigit(deciseconds/10 , pos); // Décimas
+  mxControl.setColumn(pos+5, B00100100); // Dos puntos
+  if(minutes<10) // muestra centesimas
+  {
+    pos-= 6;
+    drawDigit(deciseconds%10, pos); // Añadir cero a la izquierda si minutos < 10
+  }
 }
 
 void drawDigit(int digit, int position)
@@ -500,8 +455,205 @@ void drawDigit(int digit, int position)
   }
 }
 
+// Text parameters
+#define CHAR_SPACING  1 // pixels between characters
+// Print the text string to the LED matrix modules specified.
+// Message area is padded with blank columns after printing.
+void printText( char *pMsg)
+{
+  uint8_t modStart= 0;
+  uint8_t modEnd = NUM_MATRICES-1;
+  uint8_t   state = 0;
+  uint8_t   curLen;
+  uint16_t  showLen;
+  uint8_t   cBuf[8];
+  int16_t   col = ((modEnd + 1) * COL_SIZE) - 1;
+
+  mxControl.control(modStart, modEnd, MD_MAX72XX::UPDATE, MD_MAX72XX::OFF);
+
+  do     // finite state machine to print the characters in the space available
+  {
+    switch(state)
+    {
+      case 0: // Load the next character from the font table
+        // if we reached end of message, reset the message pointer
+        if (*pMsg == '\0')
+        {
+          showLen = col - (modEnd * COL_SIZE);  // padding characters
+          state = 2;
+          break;
+        }
+
+        // retrieve the next character form the font file
+        showLen = mxControl.getChar(*pMsg++, sizeof(cBuf)/sizeof(cBuf[0]), cBuf);
+        curLen = 0;
+        state++;
+        // !! deliberately fall through to next state to start displaying
+
+      case 1: // display the next part of the character
+      mxControl.setColumn(col--, cBuf[curLen++]);
+
+        // done with font character, now display the space between chars
+        if (curLen == showLen)
+        {
+          showLen = CHAR_SPACING;
+          state = 2;
+        }
+        break;
+
+      case 2: // initialize state for displaying empty columns
+        curLen = 0;
+        state++;
+        // fall through
+
+      case 3:	// display inter-character spacing or end of message padding (blank columns)
+      mxControl.setColumn(col--, 0);
+        curLen++;
+        if (curLen == showLen)
+          state = 0;
+        break;
+
+      default:
+        col = -1;   // this definitely ends the do loop
+    }
+  } while (col >= (modStart * COL_SIZE));
+
+  mxControl.control(modStart, modEnd, MD_MAX72XX::UPDATE, MD_MAX72XX::ON);
+}
+
+
+
+void mensajeBienvenida()
+{
+  mx.displayText("AGUSTINOS GR", PA_CENTER, 40, 1200, PA_SCROLL_LEFT);
+  while (!mx.displayAnimate())
+  {
+  }
+  mx.displayClear();
+  // mxControl.clear();
+
+  // Mostrar el número 3 en espera
+  // drawDigit(3, 14);
+  // Muestra el nombre del dispositivo
+  char nombre[20];
+  nombreDispositivo(nombre);
+  mx.displayText(nombre, PA_CENTER, 40, 1200, PA_SCROLL_UP);
+  while (!mx.displayAnimate())
+  {
+  }
+
+}
+
+void actualizaPantalla()
+{
+  if (running && countdownFinished)
+  {
+    static uint32_t lastDeciSeconds = 0;
+    if (deciseconds != lastDeciSeconds)
+    { // Actualizar solo cuando sea necesario
+      lastDeciSeconds = deciseconds;
+      displayTime();
+    }
+    return;
+  }
+
+  if (!countdownFinished)
+  { // Mostrar cuenta regresiva sin bloquear el micro
+    showCountdown();
+  }
+
+  if(!running && countdownFinished)
+  { // Mostrar mensaje de parada
+    static uint32_t lastStopTime = 0;
+    if (millis() - lastStopTime > 2000) // Actualizar cada segundos
+    {
+      lastStopTime = millis();
+      mxControl.clear();
+      /* char msj[40];
+      sprintf(msj, "ESPERA NODOS:%d     ", contNodos);
+      scrollText(msj, 80); */
+      static bool alterna = true;
+      if(alterna)
+      {
+        displayTime(true); // Muestra el tiempo final
+        alterna = false;
+      }
+      else
+      {
+        printText("PAUSA");
+        //mx.displayText("PAUSA", PA_CENTER, 40, 1200, PA_PRINT);
+        alterna = true;
+      }
+
+    }
+  }
+}
+
+char *cadenaEstado(uint8_t estado)
+{
+  static char estadoStr[20];
+  switch (estado)
+  {
+  case IDSTARTCOUNT:
+    strcpy(estadoStr, "Iniciar");
+    break;
+  case IDSTOP:
+    strcpy(estadoStr, "Parado");
+    break;
+  case IDRESET:
+    strcpy(estadoStr, "Reiniciar");
+    break;
+  case IDSTART:
+    strcpy(estadoStr, "Corre");
+    break;
+  default:
+    strcpy(estadoStr, "DESCONOCIDO");
+    break;
+  }
+  return estadoStr;
+}
+
+
 ///////////////////////////////////////////////
 // ESP-NOW
+
+void iniciaESPNow()
+{
+  // Inicializar ESP-NOW
+  // Configurar el modo de Wi-Fi
+  WiFi.mode(WIFI_STA);
+
+  // Inicializar ESP-NOW
+  if (esp_now_init() != ESP_OK)
+  {
+    DP("Error al inicializar ESP-NOW");
+    return;
+  } else 
+    DP("ESP-NOW inicializado correctamente");
+
+
+  esp_err_t ret = esp_wifi_get_mac(WIFI_IF_STA, baseMac);
+  if (ret == ESP_OK)
+  {
+    D(Serial.printf("MAC: %02x:%02x:%02x:%02x:%02x:%02x\n",
+                    baseMac[0], baseMac[1], baseMac[2],
+                    baseMac[3], baseMac[4], baseMac[5]));
+  }
+  else
+  {
+    DP("Failed to read MAC address");
+  }
+
+  // Registrar la función de callback
+  // if(NODO == 0)
+  registraEmisor();
+  // else
+  registraReceptor();
+
+  // Inicializar estructuras de datos
+  reseteaDatosReceptor();
+}
+
 // funcion que se ejecutara cuando se reciba un paquete
 void OnDataRecv(const uint8_t *mac_addr, const uint8_t *incomingData, int len)
 {
@@ -518,8 +670,10 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *incomingData, int len)
     return;
   }
 
-  if (len != sizeof(datoTiempo))
+  if (len != sizeof(datoTiempo)){
+    DF("Error tamaño de datos recibido: %d, esperado: %d\n", len, sizeof(datoTiempo));
     return; // Error tamaño
+  }  
   datoTiempo myData;
   memcpy(&myData, incomingData, sizeof(myData));
   if (myData.id < 1 || myData.id > numSlaves)
@@ -529,7 +683,9 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *incomingData, int len)
   datosRecibidos[myData.id - 1].deciseconds = myData.deciseconds;
   datosRecibidos[myData.id - 1].seconds = myData.seconds;
   datosRecibidos[myData.id - 1].minutes = myData.minutes;
+  datosRecibidos[myData.id - 1].hours = myData.hours; // Añadido para mostrar horas
   datosRecibidos[myData.id - 1].id = myData.id;
+  datosRecibidos[myData.id - 1].estado = myData.estado;
   if (datosRecibidos[myData.id - 1].mac_addr[0] == 0 && datosRecibidos[myData.id - 1].mac_addr[1] == 0 && datosRecibidos[myData.id - 1].mac_addr[2] == 0)
   { // Nueva MAC recibida, la registramos
     // Register peer
@@ -577,25 +733,31 @@ bool procesaMensaje(const uint8_t *mac_addr, const uint8_t *incomingData, int le
     return false; // Centro no procesa mensajes
 
   D(Serial.printf("Mensaje %d/%d\n", myMsg.id, myMsg.msg);)
-  if (myMsg.msg == IDSTARTCOUNT)
-  { // Mensaje start
-    DP("Msg Start");
-    resetTimer();
-    startCountdown();
-  }
-  else if (myMsg.msg == IDSTOP)
-  { // Mensaje stop
-    DP("Msg Stop");
-    if (running)
-    {
+  switch (myMsg.msg)
+  {
+    case IDSTARTCOUNT:
+      DP("Msg Start");
+      resetTimer();
+      startCountdown();
+      break;
+    case IDSTOP:
+      DP("Msg Stop");
       stopTimer();
-    }
-  }
-  else if (myMsg.msg == IDRESET)
-  { // Mensaje stop
-    DP("Msg Reset");
-    resetTimer();
-    displayTime();
+      break;
+    case IDRESET:
+      DP("Msg Reset");
+      resetTimer();
+      displayTime();
+      break;
+    case IDSTART:
+      if( running) break; // Ya estaba en el modo
+      resetTimer();
+      finishCountdown();
+      //DP("Contador iniciado");
+      break;
+    default:
+      DP("Msg Desconocido");
+      break;
   }
 
   return true;
@@ -610,6 +772,8 @@ void reseteaDatosReceptor()
     datosRecibidos[i].deciseconds = 0;
     datosRecibidos[i].seconds = 0;
     datosRecibidos[i].minutes = 0;
+    datosRecibidos[i].hours = 0; // Añadido para mostrar horas
+    datosRecibidos[i].estado = 0;
     datosRecibidos[i].mac_addr[0] = 0;
     datosRecibidos[i].mac_addr[1] = 0;
     datosRecibidos[i].mac_addr[2] = 0;
@@ -676,6 +840,8 @@ bool enviarDatosTiempo(uint8_t *mac_addr_tosend)
   myData.deciseconds = deciseconds;
   myData.seconds = seconds;
   myData.minutes = minutes;
+  myData.hours = hours; // Añadido para mostrar horas
+  myData.estado = !countdownFinished ? IDSTARTCOUNT: (running ? IDSTART : IDSTOP); // Estado del cronómetro
   memcpy(myData.mac_addr, baseMac, 6);
 
   esp_err_t result = esp_now_send(mac_addr_tosend, (uint8_t *)&myData, sizeof(myData));
@@ -745,7 +911,7 @@ bool enviarDatosTiempoATodos(uint8_t msg)
 {
   if (NODO != 0)
   {
-    DP("No se puede enviar datosa multiples puntos desde un receptor");
+    DP("No se puede enviar datos a multiples puntos desde un receptor");
     return false;
   }
 
@@ -760,6 +926,8 @@ bool enviarDatosTiempoATodos(uint8_t msg)
     myData.deciseconds = deciseconds;
     myData.seconds = seconds;
     myData.minutes = minutes;
+    myData.hours = hours;
+    myData.estado = !countdownFinished ? IDSTARTCOUNT : (running ? IDSTART : IDSTOP); // Estado del cronómetro
     memcpy(myData.mac_addr, baseMac, 6);
 
     enviaPaquete((uint8_t *)&myData, sizeof(myData), datosRecibidos[i].mac_addr);
@@ -802,3 +970,5 @@ void nombreDispositivo(char *nombre)
   else
     sprintf(nombre, "Nodo %d", NODO);
 }
+
+///////////////////////////////////////////////
