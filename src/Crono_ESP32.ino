@@ -15,7 +15,7 @@ const int numSlaves = 12;       // Número de esclavos
 // Número de nodo = 0 receptor, 1 a numSlaves = transmisores
 const uint8_t NODO = 0;
 // Cambiar con la dirección MAC del receptor
-uint8_t broadcastAddress[] = {0x3c, 0x84, 0x27, 0xf2, 0x7d, 0xcc};
+uint8_t broadcastAddress[] = {0x3c, 0x8a, 0x1f, 0x5e, 0x32, 0xb0};
 
 #define DEBUG
 
@@ -65,16 +65,16 @@ const int pinTX = 13;//17;
 const int pinRX = 14;//18;
 const int pinDE = 4;
 #elif MODULO == ESP32S3
-#define CLK_PIN 18 // Pin de reloj (GPIO18)
-#define CS_PIN 5  // Pin de selección (GPIO5)
-#define DATA_PIN 24 //18 //  23//6 // Pin de datos (GPIO23)
+#define CLK_PIN 16 // Pin de reloj (GPIO18)
+#define CS_PIN 17  // Pin de selección (GPIO5)
+#define DATA_PIN 18 //18 //  23//6 // Pin de datos (GPIO23)
 // Pines para los pulsadores y LEDs
-#define START_BUTTON_PIN 26 //4  // 2 // Pulsador de inicio (GPIO19)
-#define STOP_BUTTON_PIN 27 //5  // 0  // Pulsador de parada (GPIO21)
+#define START_BUTTON_PIN 4 //4  // 2 // Pulsador de inicio (GPIO19)
+#define STOP_BUTTON_PIN 5 //5  // 0  // Pulsador de parada (GPIO21)
 // Pines para el RS485
-const int pinTX = 13;//17;
-const int pinRX = 14;//18;
-const int pinDE = 4;
+const int pinTX = 19;//17;
+const int pinRX = 20;//18;
+const int pinDE = 7;
 #endif
 
 // Definir el número total de matrices de 8x8 (4 matrices)
@@ -269,7 +269,7 @@ void compruebaBotones()
   if (stopButton.rose() && stopButton.previousDuration() > 2000 && NODO == 0)
   {
     DP("Boton parada pulsado más de 2 segundos");
-    enviarMensajeoATodos(IDRESET);
+    if(NODO == 0) enviarMensajeoATodos(IDRESET);
     resetTimer();
     displayTime(true);
   }
@@ -278,7 +278,7 @@ void compruebaBotones()
 void incrementTime()
 {
 static uint32_t lastIncrementTime = 0;
-uint32_t currentTime = millis();
+uint32_t currentTime = millis() - (NODO==0? 1:0);//+ 60*1000*59;
 
   if(lastIncrementTime == 0) lastIncrementTime = currentTime;
   if (!running) return; // No actualiza cuando está parado
@@ -317,7 +317,7 @@ void startCountdown()
   drawDigit(contAtras, 14);
   DP("Inicio cuenta atrás");
 
-  enviarMensajeoATodos(IDSTARTCOUNT);
+  if(NODO == 0) enviarMensajeoATodos(IDSTARTCOUNT);
 }
 
 void showCountdown()
@@ -423,7 +423,7 @@ void displayTime(bool force)
     mxControl.setColumn(pos, B00100100); // Dos puntos 19
     pos -= 6;
   }
-  if(minutes>10 || hours > 0)  // muestra centesimas y no decenas deminutos
+  if(minutes>9 || hours > 0)  // muestra centesimas y no decenas deminutos
   {
     drawDigit((minutes % 60) / 10, pos); // Decenas de minutos 27
     pos -= 6;
@@ -459,7 +459,7 @@ void drawDigit(int digit, int position)
 #define CHAR_SPACING  1 // pixels between characters
 // Print the text string to the LED matrix modules specified.
 // Message area is padded with blank columns after printing.
-void printText( char *pMsg)
+void printText( const char *pMsg)
 {
   uint8_t modStart= 0;
   uint8_t modEnd = NUM_MATRICES-1;
@@ -520,8 +520,6 @@ void printText( char *pMsg)
 
   mxControl.control(modStart, modEnd, MD_MAX72XX::UPDATE, MD_MAX72XX::ON);
 }
-
-
 
 void mensajeBienvenida()
 {
