@@ -13,7 +13,7 @@
 const int numSlaves = 12;       // Número de esclavos
 
 // Número de nodo = 0 receptor, 1 a numSlaves = transmisores
-const uint8_t NODO = 0;
+const uint8_t NODO = 2;
 // Cambiar con la dirección MAC del receptor
 uint8_t broadcastAddress[] = {0x3c, 0x8a, 0x1f, 0x5e, 0x32, 0xb0};
 
@@ -35,7 +35,7 @@ uint8_t broadcastAddress[] = {0x3c, 0x8a, 0x1f, 0x5e, 0x32, 0xb0};
 #define MINID1 1
 #define DOITESP32 2
 #define ESP32S3 3
-#define MODULO MINID1 // Poner 
+#define MODULO ESP32S3 // Poner 
 
 #if MODULO == MINID1
 #define CLK_PIN 32 //16//  18//4  // Pin de reloj (GPIO18)
@@ -132,7 +132,7 @@ Bounce startButton = Bounce();
 Bounce stopButton = Bounce();
 
 // Patrones de dígitos personalizados (8x5)
-byte digits[numSlaves][5] = {
+byte digits[10][5] = {
     {0x7E, 0x81, 0x81, 0x81, 0x7E},
     {0x00, 0x82, 0xFF, 0x80, 0x00},
     {0xC2, 0xA1, 0x91, 0x89, 0x86},
@@ -179,7 +179,9 @@ void setup()
   stopButton.attach(STOP_BUTTON_PIN);
   stopButton.interval(25);
 
-  DP("Iniciando Cronómetro ESP32...");
+  char nombre[20];
+  nombreDispositivo(nombre);
+  DF("Iniciando Cronómetro %s ESP32...\n", nombre);
 
   // Inicializar MAX7219
   mx.begin();
@@ -206,7 +208,7 @@ void loop()
   uint32_t now = millis();
   // if (seconds != lastSeconds && NODO > 0) { // Actualizar cada 1 segundo
   //   lastSeconds = seconds;
-  if (now - lastTime >= 50 + random(5) && NODO > 0)
+  if (now - lastTime >= 200 + random(10) && NODO > 0)
   { // Los satélites envían cada cierto tiempo los datos de tiempo
     lastTime = now;
     enviarDatosTiempo();
@@ -662,8 +664,10 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *incomingData, int len)
 
   if (len == sizeof(mensajeSimple))
   {
-    if (NODO == 0)
+    if (NODO == 0){
+      DP("Mensaje recibido en el centro, no se procesa");
       return; // El centro no procesa mensajes
+      }
     procesaMensaje(mac_addr, incomingData, len);
     return;
   }
@@ -674,9 +678,10 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *incomingData, int len)
   }  
   datoTiempo myData;
   memcpy(&myData, incomingData, sizeof(myData));
-  if (myData.id < 1 || myData.id > numSlaves)
+  if (myData.id < 1 || myData.id > numSlaves){
+    DF("Error rango id: %d, esperado entre 1 y %d\n", myData.id, numSlaves);
     return; // Error rango id
-
+    }
   // Si es centro, actualizar la estructura con los nuevos datos recibidos
   datosRecibidos[myData.id - 1].deciseconds = myData.deciseconds;
   datosRecibidos[myData.id - 1].seconds = myData.seconds;
@@ -716,8 +721,8 @@ void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status)
 {
   if (status != ESP_NOW_SEND_SUCCESS)
   {
-    D(Serial.printf("Error al enviar los datos a: %02x:%02x:%02x:%02x:%02x:%02x\n",
-                    mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5]);)
+    D(Serial.printf("Error %d al enviar los datos a: %02x:%02x:%02x:%02x:%02x:%02x\n",
+                    status, mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5]);)
   }
 }
 
