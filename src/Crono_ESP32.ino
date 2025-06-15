@@ -10,10 +10,10 @@
 #include <SPI.h>
 #include <Bounce2.h>
 
-const int numSlaves = 12;       // Número de esclavos
+const int numSlaves = 0;       // Número de esclavos
 
 // Número de nodo = 0 receptor, 1 a numSlaves = transmisores
-const uint8_t NODO = 2;
+const uint8_t NODO = 3;
 // Cambiar con la dirección MAC del receptor
 uint8_t broadcastAddress[] = {0x3c, 0x8a, 0x1f, 0x5e, 0x32, 0xb0};
 
@@ -27,7 +27,7 @@ uint8_t broadcastAddress[] = {0x3c, 0x8a, 0x1f, 0x5e, 0x32, 0xb0};
 #else
 #define D(x)
 #define DP(x)
-#define DF(x)
+#define DF(...) {}
 #endif
 
 ///////////////////////
@@ -35,7 +35,7 @@ uint8_t broadcastAddress[] = {0x3c, 0x8a, 0x1f, 0x5e, 0x32, 0xb0};
 #define MINID1 1
 #define DOITESP32 2
 #define ESP32S3 3
-#define MODULO ESP32S3 // Poner 
+#define MODULO DOITESP32 // Poner 
 
 #if MODULO == MINID1
 #define CLK_PIN 32 //16//  18//4  // Pin de reloj (GPIO18)
@@ -47,6 +47,8 @@ uint8_t broadcastAddress[] = {0x3c, 0x8a, 0x1f, 0x5e, 0x32, 0xb0};
 #define STOP_BUTTON_PIN 17 //5  // 0  // Pulsador de parada (GPIO21)
 //#define GENSTART_BUTTON_PIN 8 //  Pulsador de inicio general
 //#define GENSTOP_BUTTON_PIN 3 //  Pulsador de parada general
+#define BUTTON_PIN 2 // Pin del LED de estado (GPIO2)
+#define LED_PIN 21 // Pin del LED de estado (GPIO21)
 
 // Pines para el RS485
 const int pinTX = 13;//17;
@@ -60,6 +62,9 @@ const int pinDE = 4;
 // Pines para los pulsadores y LEDs
 #define START_BUTTON_PIN 26 //4  // 2 // Pulsador de inicio (GPIO19)
 #define STOP_BUTTON_PIN 27 //5  // 0  // Pulsador de parada (GPIO21)
+#define BUTTON_PIN 2 // Pin del LED de estado (GPIO2)
+#define LED_PIN 21 // Pin del LED de estado (GPIO21)
+
 // Pines para el RS485
 const int pinTX = 13;//17;
 const int pinRX = 14;//18;
@@ -75,6 +80,9 @@ const int pinDE = 4;
 const int pinTX = 19;//17;
 const int pinRX = 20;//18;
 const int pinDE = 7;
+#define BUTTON_PIN 2 // Pin del LED de estado (GPIO2)
+#define LED_PIN 21 // Pin del LED de estado (GPIO21)
+
 #endif
 
 // Definir el número total de matrices de 8x8 (4 matrices)
@@ -93,6 +101,8 @@ const uint8_t IDSTARTCOUNT = 1;
 const uint8_t IDSTOP = 98;
 const uint8_t IDRESET = 97;
 const uint8_t IDSTART = 96;
+const uint8_t IDLED = 99;
+bool ledON = false;
 
 typedef struct
 {
@@ -126,10 +136,13 @@ volatile bool running = false;
 volatile bool countdownFinished = true;
 uint32_t tiempoArranque = 0; // Tiempo de inicio del contador
 const uint8_t cuentaAtrasNumeroInicial = 3; // Número inicial para la cuenta atrás
+uint8_t contAtras = 0;
+uint32_t lastTimeCuentaAtras = 0;
 
 // Crear objetos Bounce para el debounce de los botones
 Bounce startButton = Bounce();
 Bounce stopButton = Bounce();
+Bounce otroBoton = Bounce(); // Botón adicional si se necesita
 
 // Patrones de dígitos personalizados (8x5)
 byte digits[10][5] = {
@@ -163,6 +176,7 @@ bool enviarDatosTiempo(uint8_t *mac_addr_tosend = nullptr);
 bool enviarDatosTiempoATodos(uint8_t msg = 0);
 bool enviarMensajeoATodos(uint8_t msg);
 bool enviaPaquete(uint8_t *data, size_t len, uint8_t *mac_addr_tosend = nullptr);
+char *cadenaEstado(uint8_t estado);
 
 void setup()
 {
@@ -172,12 +186,16 @@ void setup()
   // Configuración de pines
   pinMode(START_BUTTON_PIN, INPUT_PULLUP);
   pinMode(STOP_BUTTON_PIN, INPUT_PULLUP);
+  pinMode(BUTTON_PIN, OUTPUT); // Boton de arranque
+  pinMode(LED_PIN, OUTPUT); // Pin del LED de estado
 
   // Configurar botones con debounce
   startButton.attach(START_BUTTON_PIN);
   startButton.interval(25);
   stopButton.attach(STOP_BUTTON_PIN);
   stopButton.interval(25);
+  otroBoton.attach(BUTTON_PIN);
+  otroBoton.interval(25);
 
   char nombre[20];
   nombreDispositivo(nombre);
@@ -194,42 +212,73 @@ void setup()
   DP("Sistema ESP-NOW iniciado correctamente.");
   
   mensajeBienvenida();
+
+  delay(1000);
+  // Inicializar datos recibidos
+  if(NODO == 0) enviarMensajeoATodos(IDRESET);
 }
 
 /////////////////////////////////////////
 void loop()
 {
+  static bool ledwasOn = false;
+  if(ledON)
+  {
+    static uint32_t tInicio = 0;
+    uint32_t tAct = millis();
+    if(!ledwasOn)
+    {
+      tInicio = tAct;
+      ledwasOn = true;
+      digitalWrite(LED_PIN, HIGH); // Enciende el LED
+      DP("LED ON");
+    }
+    if(tAct-tInicio >= 100)
+    {
+      ledON = false;
+      ledwasOn = false;
+      digitalWrite(LED_PIN, LOW); // Apaga el LED
+      DP("LED OFF");
+    }
+  }
+
   incrementTime();
 
+  compruebaBotones();
 
   // Prueba de envío cada 1 segundo
   // static uint32_t lastSeconds = 0;
-  static uint32_t lastTime = 0;
+  static uint32_t lastTimeReset = 0;
   uint32_t now = millis();
   // if (seconds != lastSeconds && NODO > 0) { // Actualizar cada 1 segundo
   //   lastSeconds = seconds;
-  if (now - lastTime >= 200 + random(10) && NODO > 0)
+  if (now - lastTimeReset >= 200 + random(10) && NODO > 0)
   { // Los satélites envían cada cierto tiempo los datos de tiempo
-    lastTime = now;
+    lastTimeReset = now;
     enviarDatosTiempo();
   }
-  else if (now - lastTime >= 5000)
+  else if (now - lastTimeReset >= 5000)
   { // El centro Manda la lista de resultados cada cierto tiempo
-    lastTime = now;
+    lastTimeReset = now;
     // Imprime lista tiempos recibidos
     Serial.println("----------------------------");
-    D(Serial.printf("Centro Tiempo: %02d:%02d.%02d\n",
-                    minutes, seconds, deciseconds);)
+    Serial.printf("Centro Tiempo: %02d:%02d:%02d.%02d\n",
+                    hours, minutes, seconds, deciseconds);
     for (int i = 0; i < numSlaves; i++)
     {
       if (datosRecibidos[i].id == 0)
         continue; //{
 
       Serial.printf("ID: %d\t", datosRecibidos[i].id);
-      Serial.printf("Tiempo: %02d:%02d.%02d",
+      Serial.printf("Estado: %s\t", cadenaEstado(datosRecibidos[i].estado));
+      Serial.printf("Tiempo: %02d:%02d:%02d",
+                    datosRecibidos[i].hours,
                     datosRecibidos[i].minutes,
-                    datosRecibidos[i].seconds,
-                    datosRecibidos[i].deciseconds);
+                    datosRecibidos[i].seconds);
+      if(datosRecibidos[i].estado == IDSTOP)
+      {
+        Serial.printf(".%02d", datosRecibidos[i].deciseconds);
+      }
       D(Serial.printf("\tMAC: %02x:%02x:%02x:%02x:%02x:%02x",
                       datosRecibidos[i].mac_addr[0], datosRecibidos[i].mac_addr[1],
                       datosRecibidos[i].mac_addr[2], datosRecibidos[i].mac_addr[3],
@@ -240,10 +289,7 @@ void loop()
     Serial.println("");
   }
 
-  compruebaBotones();
-
   actualizaPantalla();
-
 }
 
 void compruebaBotones()
@@ -262,9 +308,9 @@ void compruebaBotones()
   if (stopButton.fell()  && running)
   {
     DP("Boton parada pulsado");
+    stopTimer();
     if (NODO == 0)
       enviarMensajeoATodos(IDSTOP);
-    stopTimer();
   }
 
   // Se ha pulsado stop más de 2 segundos
@@ -280,7 +326,7 @@ void compruebaBotones()
 void incrementTime()
 {
 static uint32_t lastIncrementTime = 0;
-uint32_t currentTime = millis() - (NODO==0? 1:0);//+ 60*1000*59;
+uint32_t currentTime = millis();// - (NODO==0? 1:0);//+ 60*1000*59;
 
   if(lastIncrementTime == 0) lastIncrementTime = currentTime;
   if (!running) return; // No actualiza cuando está parado
@@ -306,18 +352,15 @@ void resetTimer()
   // reseteaDatosReceptor();
 }
 
-uint8_t contAtras = 0;
-uint32_t lastTime = 0;
-
 void startCountdown()
 {
   countdownFinished = false;
   contAtras = cuentaAtrasNumeroInicial;
-  lastTime = millis();
+  //lastTimeCuentaAtras = millis();
 
   mxControl.clear();
   drawDigit(contAtras, 14);
-  DP("Inicio cuenta atrás");
+  DP("Inicio cuenta atras");
 
   if(NODO == 0) enviarMensajeoATodos(IDSTARTCOUNT);
 }
@@ -341,9 +384,9 @@ void showCountdown()
     } */
 
   // Cuenta atrás cada segundo
-  if (now - lastTime >= 1000)
+  if (now - lastTimeCuentaAtras >= 1000)
   {
-    lastTime = now;
+    lastTimeCuentaAtras = now;
     if (contAtras > 1)
     {
       contAtras--;
@@ -376,6 +419,7 @@ void finishCountdown()
 
 void stopTimer()
 {
+  incrementTime();
   if (NODO > 0)
   {
     // Enviar los datos del cronómetro por ESP-NOW
@@ -557,9 +601,17 @@ void actualizaPantalla()
     return;
   }
 
+  static bool eraStop = true;
   if (!countdownFinished)
   { // Mostrar cuenta regresiva sin bloquear el micro
+    if(eraStop == true)
+    {
+      lastTimeCuentaAtras = millis();
+      eraStop = false; // Cambia el estado para no volver a entrar
+    }
     showCountdown();
+    if(countdownFinished)
+      eraStop = true;
   }
 
   if(!running && countdownFinished)
@@ -572,17 +624,20 @@ void actualizaPantalla()
       /* char msj[40];
       sprintf(msj, "ESPERA NODOS:%d     ", contNodos);
       scrollText(msj, 80); */
-      static bool alterna = true;
+      static uint8_t alterna = 0;
       if(alterna)
       {
         displayTime(true); // Muestra el tiempo final
-        alterna = false;
+        alterna++;
+        if(alterna > 2) alterna = 0; // Resetea el contador de alternancia
       }
       else
       {
-        printText("PAUSA");
-        //mx.displayText("PAUSA", PA_CENTER, 40, 1200, PA_PRINT);
-        alterna = true;
+        char nombre[20];
+        nombreDispositivo(nombre);
+        printText(nombre);
+        //printText("PAUSA");
+        alterna = 1;
       }
 
     }
@@ -675,7 +730,9 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *incomingData, int len)
   if (len != sizeof(datoTiempo)){
     DF("Error tamaño de datos recibido: %d, esperado: %d\n", len, sizeof(datoTiempo));
     return; // Error tamaño
-  }  
+  }
+  if(NODO!=0) return; // Los nodos no guardan datos recibidos
+
   datoTiempo myData;
   memcpy(&myData, incomingData, sizeof(myData));
   if (myData.id < 1 || myData.id > numSlaves){
@@ -721,8 +778,8 @@ void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status)
 {
   if (status != ESP_NOW_SEND_SUCCESS)
   {
-    D(Serial.printf("Error %d al enviar los datos a: %02x:%02x:%02x:%02x:%02x:%02x\n",
-                    status, mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5]);)
+    DF("Error %d al enviar los datos a: %02x:%02x:%02x:%02x:%02x:%02x\n",
+                    status, mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5]);
   }
 }
 
@@ -735,7 +792,7 @@ bool procesaMensaje(const uint8_t *mac_addr, const uint8_t *incomingData, int le
   if (NODO == 0)
     return false; // Centro no procesa mensajes
 
-  D(Serial.printf("Mensaje %d/%d\n", myMsg.id, myMsg.msg);)
+  DF("Mensaje %d/%d\n", myMsg.id, myMsg.msg);
   switch (myMsg.msg)
   {
     case IDSTARTCOUNT:
@@ -749,6 +806,7 @@ bool procesaMensaje(const uint8_t *mac_addr, const uint8_t *incomingData, int le
       break;
     case IDRESET:
       DP("Msg Reset");
+      stopTimer();
       resetTimer();
       displayTime();
       break;
@@ -757,6 +815,10 @@ bool procesaMensaje(const uint8_t *mac_addr, const uint8_t *incomingData, int le
       resetTimer();
       finishCountdown();
       //DP("Contador iniciado");
+      break;
+    case IDLED:
+      DP("Msg LED");
+      ledON = true;
       break;
     default:
       DP("Msg Desconocido");
@@ -971,7 +1033,7 @@ void nombreDispositivo(char *nombre)
   if (NODO == 0)
     sprintf(nombre, "Centro");
   else
-    sprintf(nombre, "Nodo %d", NODO);
+    sprintf(nombre, "Nodo%d", NODO);
 }
 
 ///////////////////////////////////////////////
