@@ -13,11 +13,13 @@
 const int numSlaves = 0;       // Número de esclavos
 
 // Número de nodo = 0 receptor, 1 a numSlaves = transmisores
-const uint8_t NODO = 3;
+const uint8_t NODO = 0;
 // Cambiar con la dirección MAC del receptor
 uint8_t broadcastAddress[] = {0x3c, 0x8a, 0x1f, 0x5e, 0x32, 0xb0};
 
-#define DEBUG
+uint8_t macAddress[6] ={0x3c, 0x8a, 0x1f, 0x5e, 0x32, 0xb0}; // Dirección MAC del dispositivo actual
+
+//#define DEBUG
 
 #ifdef DEBUG
 #define D(x) x                  /// Shorthand for Debug
@@ -693,10 +695,17 @@ void iniciaESPNow()
     D(Serial.printf("MAC: %02x:%02x:%02x:%02x:%02x:%02x\n",
                     baseMac[0], baseMac[1], baseMac[2],
                     baseMac[3], baseMac[4], baseMac[5]));
+    if( baseMac[0] != macAddress[0] || baseMac[1] != macAddress[1] || baseMac[2] != macAddress[2] ||
+        baseMac[3] != macAddress[3] || baseMac[4] != macAddress[4] || baseMac[5] != macAddress[5])
+    {
+      DP("MAC address is all zeros, check your ESP32 connection");
+      while(0); // Detener si la MAC es cero
+    }
   }
   else
   {
     DP("Failed to read MAC address");
+    while(0); // Detener si no se puede leer la MAC
   }
 
   // Registrar la función de callback
