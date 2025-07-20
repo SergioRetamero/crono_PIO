@@ -10,16 +10,16 @@
 #include <SPI.h>
 #include <Bounce2.h>
 
-const int numSlaves = 0;       // Número de esclavos
+const int numSlaves = 12;       // Número de esclavos
 
 // Número de nodo = 0 receptor, 1 a numSlaves = transmisores
 const uint8_t NODO = 0;
 // Cambiar con la dirección MAC del receptor
 uint8_t broadcastAddress[] = {0x3c, 0x8a, 0x1f, 0x5e, 0x32, 0xb0};
 
-uint8_t macAddress[6] ={0x3c, 0x8a, 0x1f, 0x5e, 0x32, 0xb0}; // Dirección MAC del dispositivo actual
+uint8_t macAddress[6] = {0x3c, 0x8a, 0x1f, 0x5e, 0x32, 0xb0}; // Dirección MAC del dispositivo actual
 
-//#define DEBUG
+#define DEBUG
 
 #ifdef DEBUG
 #define D(x) x                  /// Shorthand for Debug
@@ -37,7 +37,7 @@ uint8_t macAddress[6] ={0x3c, 0x8a, 0x1f, 0x5e, 0x32, 0xb0}; // Dirección MAC d
 #define MINID1 1
 #define DOITESP32 2
 #define ESP32S3 3
-#define MODULO DOITESP32 // Poner 
+#define MODULO MINID1 // Poner 
 
 #if MODULO == MINID1
 #define CLK_PIN 32 //16//  18//4  // Pin de reloj (GPIO18)
@@ -51,6 +51,10 @@ uint8_t macAddress[6] ={0x3c, 0x8a, 0x1f, 0x5e, 0x32, 0xb0}; // Dirección MAC d
 //#define GENSTOP_BUTTON_PIN 3 //  Pulsador de parada general
 #define BUTTON_PIN 2 // Pin del LED de estado (GPIO2)
 #define LED_PIN 21 // Pin del LED de estado (GPIO21)
+#define UP_BUTTON_PIN 18 // Pulsador de incremento
+#define DOWN_BUTTON_PIN 14 // Pulsador de decremento
+#define LEFT_BUTTON_PIN 23 // Pulsador izquierda
+#define RIGHT_BUTTON_PIN 19 // Pulsador derecha 
 
 // Pines para el RS485
 const int pinTX = 13;//17;
@@ -66,6 +70,10 @@ const int pinDE = 4;
 #define STOP_BUTTON_PIN 27 //5  // 0  // Pulsador de parada (GPIO21)
 #define BUTTON_PIN 2 // Pin del LED de estado (GPIO2)
 #define LED_PIN 21 // Pin del LED de estado (GPIO21)
+#define UP_BUTTON_PIN 16 // Pulsador de incremento
+#define DOWN_BUTTON_PIN 17 // Pulsador de decremento
+#define LEFT_BUTTON_PIN 18 // Pulsador izquierda
+#define RIGHT_BUTTON_PIN 19 // Pulsador derecha 
 
 // Pines para el RS485
 const int pinTX = 13;//17;
@@ -104,12 +112,16 @@ const uint8_t IDSTOP = 98;
 const uint8_t IDRESET = 97;
 const uint8_t IDSTART = 96;
 const uint8_t IDLED = 99;
+const uint8_t IDBRILLO = 100; // Mensaje de brillo
+const uint8_t IDTIEMPO = 101; // Mensaje de tiempo
+
 bool ledON = false;
 
 typedef struct
 {
   uint8_t id;
   uint8_t msg;
+  uint8_t dato;
 } mensajeSimple;
 
 typedef struct
@@ -146,6 +158,16 @@ Bounce startButton = Bounce();
 Bounce stopButton = Bounce();
 Bounce otroBoton = Bounce(); // Botón adicional si se necesita
 
+Bounce arribaBoton = Bounce(); // Cursor arriba
+Bounce abajoBoton = Bounce(); // Cursor abajo
+Bounce izquierdaBoton = Bounce(); // Cursor izquierda
+Bounce derechaBoton = Bounce(); // Cursor derecha
+
+uint8_t modoConfig = 0; // Modo de configuración en parada pulsando botón de parada
+uint8_t tiempoMaximo = 0; // Tiempo máximo en minutos
+uint8_t brilloLED = 8; // Brillo de la pantalla (0-15)
+
+
 // Patrones de dígitos personalizados (8x5)
 byte digits[10][5] = {
     {0x7E, 0x81, 0x81, 0x81, 0x7E},
@@ -176,7 +198,7 @@ bool registraEmisor();
 void nombreDispositivo(char *nombre);
 bool enviarDatosTiempo(uint8_t *mac_addr_tosend = nullptr);
 bool enviarDatosTiempoATodos(uint8_t msg = 0);
-bool enviarMensajeoATodos(uint8_t msg);
+bool enviarMensajeATodos(uint8_t msg, uint8_t dato = 0);
 bool enviaPaquete(uint8_t *data, size_t len, uint8_t *mac_addr_tosend = nullptr);
 char *cadenaEstado(uint8_t estado);
 
@@ -191,6 +213,11 @@ void setup()
   pinMode(BUTTON_PIN, OUTPUT); // Boton de arranque
   pinMode(LED_PIN, OUTPUT); // Pin del LED de estado
 
+  pinMode(UP_BUTTON_PIN, INPUT_PULLUP);
+  pinMode(DOWN_BUTTON_PIN, INPUT_PULLUP);
+  pinMode(LEFT_BUTTON_PIN, INPUT_PULLUP);
+  pinMode(RIGHT_BUTTON_PIN, INPUT_PULLUP);
+
   // Configurar botones con debounce
   startButton.attach(START_BUTTON_PIN);
   startButton.interval(25);
@@ -199,6 +226,15 @@ void setup()
   otroBoton.attach(BUTTON_PIN);
   otroBoton.interval(25);
 
+  arribaBoton.attach(UP_BUTTON_PIN);
+  arribaBoton.interval(25);
+  abajoBoton.attach(DOWN_BUTTON_PIN);
+  abajoBoton.interval(25);
+  izquierdaBoton.attach(LEFT_BUTTON_PIN);
+  izquierdaBoton.interval(25);
+  derechaBoton.attach(RIGHT_BUTTON_PIN);
+  derechaBoton.interval(25);
+
   char nombre[20];
   nombreDispositivo(nombre);
   DF("Iniciando Cronómetro %s ESP32...\n", nombre);
@@ -206,7 +242,7 @@ void setup()
   // Inicializar MAX7219
   mx.begin();
   mxControl.begin();
-  mx.setIntensity(8);
+  mx.setIntensity(brilloLED);
   mxControl.clear();
   DP("Iniciando pantalla...");
 
@@ -217,7 +253,7 @@ void setup()
 
   delay(1000);
   // Inicializar datos recibidos
-  if(NODO == 0) enviarMensajeoATodos(IDRESET);
+  if(NODO == 0) enviarMensajeATodos(IDRESET);
 }
 
 /////////////////////////////////////////
@@ -245,6 +281,16 @@ void loop()
   }
 
   incrementTime();
+  // Para el reloj sis e alcanza el tiempo máximo
+  if(tiempoMaximo > 0 && minutes >= tiempoMaximo && running)
+  {
+    DP("Tiempo máximo alcanzado");
+    deciseconds = 0;
+    seconds = 0;
+    minutes = tiempoMaximo;
+    hours = 0;
+    stopTimer();
+  }
 
   compruebaBotones();
 
@@ -298,11 +344,16 @@ void compruebaBotones()
 {
   startButton.update();
   stopButton.update();
+  arribaBoton.update();
+  abajoBoton.update();
+  izquierdaBoton.update();
+  derechaBoton.update();
 
   // Manejo de botones
   if (startButton.fell() && !running && countdownFinished)
   {
     DP("Boton inicio pulsado");
+    modoConfig = 0;
     resetTimer();
     startCountdown();
   }
@@ -312,17 +363,108 @@ void compruebaBotones()
     DP("Boton parada pulsado");
     stopTimer();
     if (NODO == 0)
-      enviarMensajeoATodos(IDSTOP);
+      enviarMensajeATodos(IDSTOP);
   }
 
   // Se ha pulsado stop más de 2 segundos
   if (stopButton.rose() && stopButton.previousDuration() > 2000 && NODO == 0)
   {
     DP("Boton parada pulsado más de 2 segundos");
-    if(NODO == 0) enviarMensajeoATodos(IDRESET);
+    if(NODO == 0) enviarMensajeATodos(IDRESET);
     resetTimer();
     displayTime(true);
   }
+
+  if(stopButton.rose() && !running && NODO == 0)
+  {
+    DP("Boton parada soltado");
+    modoConfig++; // Cambia el modo de configuración
+    if (modoConfig > 2) modoConfig = 0; // Cicla entre 0, 1 y 2
+  }
+
+  if (arribaBoton.fell() && !running && NODO == 0)
+  {
+    DP("Boton arriba pulsado");
+    if(modoConfig == 1) // Modo de configuración de tiempo máximo
+    {
+      if(tiempoMaximo < 50)
+      {
+        tiempoMaximo+=10;
+        enviarMensajeATodos(IDTIEMPO, tiempoMaximo); // Enviar el tiempo máximo a todos los nodos
+      }
+    } else if(modoConfig == 2) // Modo de configuración de brillo
+    {
+      if(brilloLED < 15)
+      {
+        brilloLED++;
+        actualizaBrillo();
+      }
+    }
+  }
+
+  if (abajoBoton.fell() && !running && NODO == 0)
+  {
+    DP("Boton abajo pulsado");
+    if(modoConfig == 1) // Modo de configuración de tiempo máximo
+    {
+      if(tiempoMaximo > 10)
+      {
+        tiempoMaximo-=10;
+        enviarMensajeATodos(IDTIEMPO, tiempoMaximo); // Enviar el tiempo máximo a todos los nodos
+      }
+    } else if(modoConfig == 2) // Modo de configuración de brillo
+    {
+      if(brilloLED > 0)
+      {
+        brilloLED--;
+        actualizaBrillo();
+    }
+    }
+  }
+
+  if (izquierdaBoton.fell() && !running && NODO == 0)
+  {
+    DP("Boton izquierda pulsado");
+    if(modoConfig == 1) // Modo de configuración de tiempo máximo
+    {
+      if(tiempoMaximo > 0)
+      {
+        tiempoMaximo-=1;
+        enviarMensajeATodos(IDTIEMPO, tiempoMaximo); // Enviar el tiempo máximo a todos los nodos
+      }
+    } else if(modoConfig == 2) // Modo de configuración de brillo
+    {
+      if(brilloLED > 0)
+        {
+          brilloLED--;
+          actualizaBrillo();
+        }
+    }
+  }
+
+  if (derechaBoton.fell() && !running && NODO == 0)
+  {
+    DP("Boton derecha pulsado");
+    if(modoConfig == 1) // Modo de configuración de tiempo máximo
+    {
+      if(tiempoMaximo < 59)
+        tiempoMaximo+=1;
+    } else if(modoConfig == 2) // Modo de configuración de brillo
+    {
+      if(brilloLED < 15)
+      {
+        brilloLED++;
+        actualizaBrillo();
+      }
+    }
+  }
+
+}
+
+void actualizaBrillo()
+{
+  mx.setIntensity(brilloLED);
+  enviarMensajeATodos(IDLED, brilloLED); // Enviar el brillo a todos los nodos
 }
 
 void incrementTime()
@@ -364,7 +506,7 @@ void startCountdown()
   drawDigit(contAtras, 14);
   DP("Inicio cuenta atras");
 
-  if(NODO == 0) enviarMensajeoATodos(IDSTARTCOUNT);
+  if(NODO == 0) enviarMensajeATodos(IDSTARTCOUNT);
 }
 
 void showCountdown()
@@ -382,7 +524,7 @@ void showCountdown()
 
   // Manda mensaje de inicio de cuenta atrás desde el centro
   /* if( NODO==0 && (lastBlink-now)%20==0) {
-    enviarMensajeoATodos(IDSTARTCOUNT);
+    enviarMensajeATodos(IDSTARTCOUNT);
     } */
 
   // Cuenta atrás cada segundo
@@ -471,11 +613,11 @@ void displayTime(bool force)
     mxControl.setColumn(pos, B00100100); // Dos puntos 19
     pos -= 6;
   }
-  if(minutes>9 || hours > 0)  // muestra centesimas y no decenas deminutos
-  {
+  //if(minutes>9 || hours > 0)  // muestra centesimas y no decenas deminutos
+  //{
     drawDigit((minutes % 60) / 10, pos); // Decenas de minutos 27
     pos -= 6;
-  }
+  //}
   drawDigit((minutes % 60) % 10, pos); // Unidades de minutos 21
   pos -= 2;
   mxControl.setColumn(pos, B00100100); // Dos puntos 19
@@ -487,12 +629,13 @@ void displayTime(bool force)
     return; // Mostrando horas, no se ven las décimas
   pos -= 7;
   drawDigit(deciseconds/10 , pos); // Décimas
-  mxControl.setColumn(pos+5, B00100100); // Dos puntos
-  if(minutes<10) // muestra centesimas
+  mxControl.setColumn(pos+5, B10000000); // Un punto
+
+  /* if(minutes<10) // muestra centesimas
   {
     pos-= 6;
     drawDigit(deciseconds%10, pos); // Añadir cero a la izquierda si minutos < 10
-  }
+  } */
 }
 
 void drawDigit(int digit, int position)
@@ -619,30 +762,61 @@ void actualizaPantalla()
   if(!running && countdownFinished)
   { // Mostrar mensaje de parada
     static uint32_t lastStopTime = 0;
-    if (millis() - lastStopTime > 2000) // Actualizar cada segundos
+    if (millis() - lastStopTime > 1000) // Actualizar cada segundos
     {
       lastStopTime = millis();
-      mxControl.clear();
-      /* char msj[40];
-      sprintf(msj, "ESPERA NODOS:%d     ", contNodos);
-      scrollText(msj, 80); */
-      static uint8_t alterna = 0;
-      if(alterna)
+      switch (modoConfig)
       {
-        displayTime(true); // Muestra el tiempo final
-        alterna++;
-        if(alterna > 2) alterna = 0; // Resetea el contador de alternancia
-      }
-      else
-      {
-        char nombre[20];
-        nombreDispositivo(nombre);
-        printText(nombre);
-        //printText("PAUSA");
-        alterna = 1;
-      }
-
+        case 0:
+          modoParadaEstandar();
+          break;
+        case 1:
+          modoParadaLimite();
+          break;
+        case 2:
+          modoParadaBrillo();
+          break;
+      } 
     }
+  }
+}
+
+void modoParadaLimite()
+{
+  mxControl.clear();
+  char nombre[20];
+  sprintf(nombre, "Lim:%2d'", tiempoMaximo);
+  printText(nombre);
+}
+
+void modoParadaBrillo()
+{
+  mxControl.clear();
+  char nombre[20];
+  sprintf(nombre, "Brillo%d", brilloLED);
+  printText(nombre);
+}
+
+void modoParadaEstandar()
+{
+  mxControl.clear();
+  /* char msj[40];
+  sprintf(msj, "ESPERA NODOS:%d     ", contNodos);
+  scrollText(msj, 80); */
+  static uint8_t alterna = 0;
+  if(alterna)
+  {
+    displayTime(true); // Muestra el tiempo final
+    alterna++;
+    if(alterna > 2) alterna = 0; // Resetea el contador de alternancia
+  }
+  else
+  {
+    char nombre[20];
+    nombreDispositivo(nombre);
+    printText(nombre);
+    //printText("PAUSA");
+    alterna = 1;
   }
 }
 
@@ -801,7 +975,7 @@ bool procesaMensaje(const uint8_t *mac_addr, const uint8_t *incomingData, int le
   if (NODO == 0)
     return false; // Centro no procesa mensajes
 
-  DF("Mensaje %d/%d\n", myMsg.id, myMsg.msg);
+  DF("Mensaje %d/%d/%d\n", myMsg.id, myMsg.msg, myMsg.dato);
   switch (myMsg.msg)
   {
     case IDSTARTCOUNT:
@@ -828,6 +1002,15 @@ bool procesaMensaje(const uint8_t *mac_addr, const uint8_t *incomingData, int le
     case IDLED:
       DP("Msg LED");
       ledON = true;
+      break;
+    case IDBRILLO:
+      DF("Msg Brillo %d\n", myMsg.dato);
+      brilloLED = myMsg.dato;
+      actualizaBrillo();
+      break;
+    case IDTIEMPO:
+      DF("Msg Tiempo %d\n", myMsg.dato);
+      tiempoMaximo = myMsg.dato;
       break;
     default:
       DP("Msg Desconocido");
@@ -937,7 +1120,7 @@ bool enviarDatosTiempo(uint8_t *mac_addr_tosend)
   return true;
 }
 
-bool enviaMensaje(uint8_t msg, uint8_t *mac_addr_tosend)
+bool enviaMensaje(uint8_t msg, uint8_t *mac_addr_tosend, uint8_t dato = 0)
 {
   if (!mac_addr_tosend)
     mac_addr_tosend = broadcastAddress;
@@ -945,6 +1128,7 @@ bool enviaMensaje(uint8_t msg, uint8_t *mac_addr_tosend)
   mensajeSimple datoMsg;
   datoMsg.id = NODO;
   datoMsg.msg = msg;
+  datoMsg.dato = dato; // Dato adicional si es necesario
 
   bool retVal = enviaPaquete((uint8_t *)&datoMsg, sizeof(datoMsg), mac_addr_tosend);
   if (!retVal)
@@ -959,10 +1143,11 @@ bool enviaMensaje(uint8_t msg, uint8_t *mac_addr_tosend)
                     mac_addr_tosend[0], mac_addr_tosend[1], mac_addr_tosend[2],
                     mac_addr_tosend[3], mac_addr_tosend[4], mac_addr_tosend[5]);)
   }
+
   return retVal;
 }
 
-bool enviarMensajeoATodos(uint8_t msg)
+bool enviarMensajeATodos(uint8_t msg, uint8_t dato )
 {
   if (NODO != 0)
   {
@@ -974,8 +1159,8 @@ bool enviarMensajeoATodos(uint8_t msg)
   {
     if (datosRecibidos[i].id == 0)
       continue;
-    D(Serial.printf("Enviando mensaje %d a %d\n", msg, datosRecibidos[i].id);)
-    enviaMensaje(msg, datosRecibidos[i].mac_addr);
+    D(Serial.printf("Enviando mensaje %d/%d a %d\n", msg, dato, datosRecibidos[i].id);)
+    enviaMensaje(msg, datosRecibidos[i].mac_addr, dato);
     delay(1);
   }
   return true;
